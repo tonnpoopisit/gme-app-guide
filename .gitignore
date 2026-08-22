@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+customer_guide_auth.json
+customer_guide_secret_key.txt
+customer_guide_content.json
+customer_guide_uploads/
+gcloud-ca-bundle.pem

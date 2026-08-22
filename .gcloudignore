@@ -1,0 +1,13 @@
+# This working directory holds many unrelated GME tools (rate fetchers,
+# API secrets, Excel workbooks, logs, a SQLite DB). `gcloud run deploy
+# --source .` uploads everything NOT excluded here as the build context, so
+# this is a deny-all-then-allow-list: only the customer guide app's own
+# code goes up. Its data (content JSON + uploaded media) is deliberately
+# NOT included either - that lives in the mounted Cloud Storage bucket
+# (DATA_DIR), never baked into the container image.
+*
+!customer_guide_server.py
+!requirements.txt
+!Procfile
+!customer_guide_static/
+!customer_guide_static/**

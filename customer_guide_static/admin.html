@@ -1,0 +1,1020 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GME App Guide - Admin</title>
+<style>
+  :root {
+    --bg: #f4f5f7;
+    --card-bg: #ffffff;
+    --border: #e1e4e8;
+    --text: #1a1d21;
+    --text-muted: #6b7280;
+    --accent: #2563eb;
+    --accent-hover: #1d4ed8;
+    --error: #dc2626;
+    --error-bg: #fef2f2;
+    --success: #16a34a;
+    --success-bg: #ecfdf5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17181c;
+      --card-bg: #202127;
+      --border: #33343b;
+      --text: #e8e9ec;
+      --text-muted: #9aa0aa;
+      --error-bg: #2c1414;
+      --success-bg: #0f2a1c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--card-bg);
+  }
+  header h1 { margin: 0; font-size: 17px; }
+  header a { color: var(--accent); font-size: 13px; text-decoration: none; }
+  button.link {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 13px;
+    cursor: pointer;
+    padding: 0;
+  }
+  .layout {
+    display: flex;
+    max-width: 1200px;
+    margin: 0 auto;
+    gap: 20px;
+    padding: 20px;
+    align-items: flex-start;
+  }
+  .panel {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+  }
+  .sections-panel { width: 260px; flex-shrink: 0; }
+  .sections-panel h2 { font-size: 14px; margin: 0 0 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.03em; }
+  .section-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 8px 6px;
+    border-radius: 8px;
+    margin-bottom: 2px;
+  }
+  .section-row.active { background: var(--bg); }
+  .section-row.dragging { opacity: 0.4; }
+  .section-row.drag-over { box-shadow: inset 0 2px 0 var(--accent); }
+  .section-row .drag-handle {
+    cursor: grab;
+    color: var(--text-muted);
+    font-size: 13px;
+    padding: 0 2px;
+  }
+  .section-row .name {
+    flex: 1;
+    cursor: pointer;
+    font-size: 14px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .section-row button {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 13px;
+    padding: 2px 5px;
+  }
+  .section-row button:hover { color: var(--text); }
+  .add-section {
+    display: flex;
+    gap: 6px;
+    margin-top: 12px;
+  }
+  .add-section input {
+    flex: 1;
+    min-width: 0;
+    padding: 7px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+  }
+  .content-panel { flex: 1; min-width: 0; }
+  .content-panel h2 { font-size: 18px; margin: 0 0 16px; }
+  .content-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+  .export-btn {
+    font-size: 12.5px;
+    font-weight: 600;
+    padding: 7px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+    color: var(--accent);
+    cursor: pointer;
+  }
+  .export-btn:hover { background: var(--bg); }
+  .export-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+  .block-card {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 12px;
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+  }
+  .block-card.dragging { opacity: 0.4; }
+  .block-card.drag-over { box-shadow: inset 0 2px 0 var(--accent); }
+  .drag-handle-block {
+    cursor: grab;
+    color: var(--text-muted);
+    font-size: 15px;
+    padding: 4px 2px;
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+  }
+  .block-card .preview img, .block-card .preview video {
+    max-width: 140px;
+    max-height: 100px;
+    border-radius: 6px;
+    display: block;
+  }
+  .block-card .preview.text-preview {
+    max-width: 140px;
+    font-size: 12px;
+    color: var(--text-muted);
+    background: var(--bg);
+    border-radius: 6px;
+    padding: 8px;
+    max-height: 100px;
+    overflow: hidden;
+  }
+  .block-card .fields { flex: 1; min-width: 0; }
+  .block-card textarea, .block-card input[type=text] {
+    width: 100%;
+    padding: 7px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+    margin-bottom: 6px;
+    font-family: inherit;
+  }
+  .block-card textarea { min-height: 60px; resize: vertical; }
+  .block-card .actions { display: flex; gap: 8px; align-items: center; }
+  .block-card .actions button {
+    font-size: 12px;
+    padding: 4px 9px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .block-card .actions button.danger { color: var(--error); border-color: var(--error-bg); }
+  .add-block-forms {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+  .add-block-forms form {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    flex: 1;
+    min-width: 220px;
+  }
+  .add-block-forms h3 { font-size: 12.5px; margin: 0 0 8px; color: var(--text-muted); }
+  .add-block-forms input, .add-block-forms textarea {
+    width: 100%;
+    padding: 7px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--card-bg);
+    color: var(--text);
+    font-size: 13px;
+    margin-bottom: 8px;
+    font-family: inherit;
+  }
+  .add-block-forms textarea { min-height: 56px; resize: vertical; }
+  .add-block-forms button {
+    font-size: 13px;
+    font-weight: 600;
+    padding: 7px 12px;
+    border-radius: 6px;
+    border: none;
+    background: var(--accent);
+    color: #fff;
+    cursor: pointer;
+  }
+  .add-block-forms button:hover { background: var(--accent-hover); }
+  .toast {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    display: none;
+  }
+  .toast.on { display: block; }
+  .toast.ok { background: var(--success-bg); color: var(--success); }
+  .toast.err { background: var(--error-bg); color: var(--error); }
+  .empty-state { color: var(--text-muted); font-size: 14px; }
+
+  .preview { display: flex; flex-direction: column; gap: 6px; }
+  .view-full-btn {
+    font-size: 11px;
+    padding: 3px 7px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+  .view-full-btn:hover { color: var(--text); }
+
+  .style-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    margin-bottom: 6px;
+  }
+  .style-toolbar button {
+    padding: 4px 9px;
+    font-size: 12px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .style-toolbar button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .style-toolbar select {
+    padding: 4px 6px;
+    font-size: 12px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+    color: var(--text);
+  }
+  .style-toolbar input[type="color"] {
+    width: 28px;
+    height: 26px;
+    padding: 0 2px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+    cursor: pointer;
+  }
+  .link-select {
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 12.5px;
+    margin-bottom: 6px;
+  }
+
+  .lightbox {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.85);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+    padding: 30px;
+  }
+  .lightbox.on { display: flex; }
+  .lightbox-content { position: relative; max-width: 90vw; max-height: 90vh; }
+  .lightbox-content img, .lightbox-content video {
+    display: block;
+    max-width: 90vw;
+    max-height: 90vh;
+    border-radius: 8px;
+  }
+  .lightbox-close {
+    position: absolute;
+    top: -14px;
+    right: -14px;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    border: none;
+    background: var(--card-bg);
+    color: var(--text);
+    font-size: 16px;
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>GME App Guide - Admin</h1>
+  <div style="display:flex; align-items:center; gap:16px;">
+    <a href="/" target="_blank">View public site &rarr;</a>
+    <button class="link" id="logoutBtn">Log out</button>
+  </div>
+</header>
+<div class="layout">
+  <div class="panel sections-panel">
+    <h2>Topics</h2>
+    <div id="sectionList"></div>
+    <form class="add-section" id="addSectionForm">
+      <input type="text" id="newSectionTitle" placeholder="New topic name">
+      <button type="submit" class="link" style="color: var(--accent); font-weight:600;">Add</button>
+    </form>
+  </div>
+  <div class="panel content-panel" id="contentPanel">
+    <div class="empty-state">Select a topic to manage its content.</div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+<div class="lightbox" id="lightbox">
+  <div class="lightbox-content" id="lightboxContent">
+    <button class="lightbox-close" id="lightboxClose">✕</button>
+  </div>
+</div>
+
+<script>
+function openLightbox(url, type) {
+  const box = document.getElementById("lightboxContent");
+  box.querySelectorAll("img, video").forEach((el) => el.remove());
+  const el = document.createElement(type === "video" ? "video" : "img");
+  el.src = url;
+  if (type === "video") { el.controls = true; el.autoplay = true; }
+  box.appendChild(el);
+  document.getElementById("lightbox").classList.add("on");
+}
+function closeLightbox() {
+  document.getElementById("lightbox").classList.remove("on");
+  document.getElementById("lightboxContent").querySelectorAll("img, video").forEach((el) => el.remove());
+}
+document.getElementById("lightboxClose").addEventListener("click", closeLightbox);
+document.getElementById("lightbox").addEventListener("click", (e) => {
+  if (e.target.id === "lightbox") closeLightbox();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeLightbox();
+});
+
+function createLinkSelect(currentLink) {
+  const select = document.createElement("select");
+  select.className = "link-select";
+  const noneOpt = document.createElement("option");
+  noneOpt.value = "";
+  noneOpt.textContent = "No link";
+  select.appendChild(noneOpt);
+  content.sections.forEach((s) => {
+    const opt = document.createElement("option");
+    opt.value = s.slug;
+    opt.textContent = "Link to: " + s.title;
+    select.appendChild(opt);
+  });
+  select.value = currentLink || "";
+  return select;
+}
+
+function createStyleToolbar(initialStyle) {
+  const style = Object.assign({ bold: false, italic: false, color: null, fontSize: "normal", align: "left" }, initialStyle || {});
+  const bar = document.createElement("div");
+  bar.className = "style-toolbar";
+
+  const boldBtn = document.createElement("button");
+  boldBtn.type = "button";
+  boldBtn.textContent = "B";
+  boldBtn.style.fontWeight = "700";
+
+  const italicBtn = document.createElement("button");
+  italicBtn.type = "button";
+  italicBtn.textContent = "I";
+  italicBtn.style.fontStyle = "italic";
+
+  const leftBtn = document.createElement("button");
+  leftBtn.type = "button";
+  leftBtn.textContent = "Left";
+  const centerBtn = document.createElement("button");
+  centerBtn.type = "button";
+  centerBtn.textContent = "Center";
+  const rightBtn = document.createElement("button");
+  rightBtn.type = "button";
+  rightBtn.textContent = "Right";
+  const alignBtns = { left: leftBtn, center: centerBtn, right: rightBtn };
+
+  function refresh() {
+    boldBtn.classList.toggle("active", style.bold);
+    italicBtn.classList.toggle("active", style.italic);
+    Object.entries(alignBtns).forEach(([key, btn]) => btn.classList.toggle("active", style.align === key));
+  }
+
+  boldBtn.addEventListener("click", () => { style.bold = !style.bold; refresh(); });
+  italicBtn.addEventListener("click", () => { style.italic = !style.italic; refresh(); });
+  leftBtn.addEventListener("click", () => { style.align = "left"; refresh(); });
+  centerBtn.addEventListener("click", () => { style.align = "center"; refresh(); });
+  rightBtn.addEventListener("click", () => { style.align = "right"; refresh(); });
+
+  const sizeSelect = document.createElement("select");
+  [["small", "Small"], ["normal", "Normal"], ["large", "Large"], ["xlarge", "X-Large"]].forEach(([value, label]) => {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = label;
+    sizeSelect.appendChild(opt);
+  });
+  sizeSelect.value = style.fontSize;
+  sizeSelect.addEventListener("change", () => { style.fontSize = sizeSelect.value; });
+
+  const colorInput = document.createElement("input");
+  colorInput.type = "color";
+  colorInput.value = style.color || "#1a1d21";
+  colorInput.title = "Text color";
+  colorInput.addEventListener("input", () => { style.color = colorInput.value; });
+
+  const resetColorBtn = document.createElement("button");
+  resetColorBtn.type = "button";
+  resetColorBtn.textContent = "Default color";
+  resetColorBtn.addEventListener("click", () => { style.color = null; colorInput.value = "#1a1d21"; });
+
+  bar.append(boldBtn, italicBtn, leftBtn, centerBtn, rightBtn, sizeSelect, colorInput, resetColorBtn);
+  refresh();
+  return { element: bar, getStyle: () => ({ ...style }) };
+}
+
+let content = { sections: [] };
+let activeSlug = null;
+
+function showToast(msg, ok) {
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.className = "toast on " + (ok ? "ok" : "err");
+  setTimeout(() => { t.className = "toast"; }, 3000);
+}
+
+async function api(path, options) {
+  const resp = await fetch(path, options);
+  let data = {};
+  try { data = await resp.json(); } catch (e) {}
+  if (!resp.ok) throw new Error(data.error || ("Request failed: " + resp.status));
+  return data;
+}
+
+async function loadContent() {
+  content = await api("/admin/api/content");
+  if (!activeSlug || !content.sections.find((s) => s.slug === activeSlug)) {
+    activeSlug = content.sections[0] ? content.sections[0].slug : null;
+  }
+  renderSections();
+  renderContentPanel();
+}
+
+function renderSections() {
+  const list = document.getElementById("sectionList");
+  list.innerHTML = "";
+  content.sections.forEach((s, i) => {
+    const row = document.createElement("div");
+    row.className = "section-row" + (s.slug === activeSlug ? " active" : "");
+    row.draggable = true;
+    row.addEventListener("dragstart", (e) => {
+      draggedSectionIndex = i;
+      row.classList.add("dragging");
+      e.dataTransfer.effectAllowed = "move";
+    });
+    row.addEventListener("dragend", () => {
+      row.classList.remove("dragging");
+      list.querySelectorAll(".drag-over").forEach((el) => el.classList.remove("drag-over"));
+    });
+    row.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      row.classList.add("drag-over");
+    });
+    row.addEventListener("dragleave", () => row.classList.remove("drag-over"));
+    row.addEventListener("drop", (e) => {
+      e.preventDefault();
+      row.classList.remove("drag-over");
+      if (draggedSectionIndex === null || draggedSectionIndex === i) return;
+      reorderSectionsByDrag(draggedSectionIndex, i);
+      draggedSectionIndex = null;
+    });
+
+    const handle = document.createElement("span");
+    handle.className = "drag-handle";
+    handle.textContent = "⠿";
+    handle.title = "Drag to reorder";
+    row.appendChild(handle);
+
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = s.title;
+    name.title = s.title;
+    name.addEventListener("click", () => { activeSlug = s.slug; renderSections(); renderContentPanel(); });
+    row.appendChild(name);
+
+    const up = document.createElement("button");
+    up.textContent = "↑";
+    up.title = "Move up";
+    up.disabled = i === 0;
+    up.addEventListener("click", () => moveSection(i, -1));
+    row.appendChild(up);
+
+    const down = document.createElement("button");
+    down.textContent = "↓";
+    down.title = "Move down";
+    down.disabled = i === content.sections.length - 1;
+    down.addEventListener("click", () => moveSection(i, 1));
+    row.appendChild(down);
+
+    const rename = document.createElement("button");
+    rename.textContent = "✎";
+    rename.title = "Rename";
+    rename.addEventListener("click", () => renameSection(s));
+    row.appendChild(rename);
+
+    const del = document.createElement("button");
+    del.textContent = "✕";
+    del.title = "Delete topic";
+    del.addEventListener("click", () => deleteSection(s));
+    row.appendChild(del);
+
+    list.appendChild(row);
+  });
+}
+
+async function applySectionOrder(order) {
+  try {
+    await api("/admin/api/sections/reorder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ order }),
+    });
+    await loadContent();
+  } catch (e) { showToast(e.message, false); }
+}
+
+async function moveSection(index, delta) {
+  const order = content.sections.map((s) => s.slug);
+  const target = index + delta;
+  if (target < 0 || target >= order.length) return;
+  [order[index], order[target]] = [order[target], order[index]];
+  await applySectionOrder(order);
+}
+
+let draggedSectionIndex = null;
+
+function reorderSectionsByDrag(fromIndex, toIndex) {
+  const order = content.sections.map((s) => s.slug);
+  const [moved] = order.splice(fromIndex, 1);
+  order.splice(toIndex, 0, moved);
+  applySectionOrder(order);
+}
+
+async function renameSection(section) {
+  const title = prompt("Rename topic", section.title);
+  if (title === null || !title.trim()) return;
+  try {
+    const updated = await api("/admin/api/sections/" + section.slug, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: title.trim() }),
+    });
+    if (activeSlug === section.slug) activeSlug = updated.slug;
+    await loadContent();
+    showToast("Renamed", true);
+  } catch (e) { showToast(e.message, false); }
+}
+
+async function deleteSection(section) {
+  if (!confirm('Delete topic "' + section.title + '" and all its content? This cannot be undone.')) return;
+  try {
+    await api("/admin/api/sections/" + section.slug, { method: "DELETE" });
+    if (activeSlug === section.slug) activeSlug = null;
+    await loadContent();
+    showToast("Deleted", true);
+  } catch (e) { showToast(e.message, false); }
+}
+
+document.getElementById("addSectionForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const input = document.getElementById("newSectionTitle");
+  const title = input.value.trim();
+  if (!title) return;
+  try {
+    const section = await api("/admin/api/sections", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    });
+    input.value = "";
+    activeSlug = section.slug;
+    await loadContent();
+    showToast("Topic added", true);
+  } catch (e) { showToast(e.message, false); }
+});
+
+async function exportImagesAsLongImage(section, button) {
+  const imageBlocks = section.blocks.filter((b) => b.type === "image");
+  if (imageBlocks.length === 0) return;
+
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = "Preparing...";
+
+  try {
+    const images = await Promise.all(imageBlocks.map((block) => new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error("Couldn't load " + block.url));
+      img.src = block.url;
+    })));
+
+    // Stitching to the widest image (capped at 1080px) keeps every photo
+    // full quality-legible while avoiding a multi-thousand-pixel-wide
+    // canvas if one upload happens to be unusually large.
+    const targetWidth = Math.min(1080, Math.max(...images.map((img) => img.naturalWidth)));
+    const scaledHeights = images.map((img) => Math.round(img.naturalHeight * (targetWidth / img.naturalWidth)));
+    const totalHeight = scaledHeights.reduce((sum, h) => sum + h, 0);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = targetWidth;
+    canvas.height = totalHeight;
+    const ctx = canvas.getContext("2d");
+    let y = 0;
+    images.forEach((img, i) => {
+      ctx.drawImage(img, 0, y, targetWidth, scaledHeights[i]);
+      y += scaledHeights[i];
+    });
+
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = _slugifyForFilename(section.title) + "-all-images.png";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    showToast("Downloaded", true);
+  } catch (e) {
+    showToast(e.message, false);
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
+}
+
+function _slugifyForFilename(title) {
+  return (title || "topic").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "topic";
+}
+
+function renderContentPanel() {
+  const panel = document.getElementById("contentPanel");
+  const section = content.sections.find((s) => s.slug === activeSlug);
+  if (!section) {
+    panel.innerHTML = '<div class="empty-state">Select or add a topic to manage its content.</div>';
+    return;
+  }
+
+  panel.innerHTML = "";
+  const headerRow = document.createElement("div");
+  headerRow.className = "content-header-row";
+  const h2 = document.createElement("h2");
+  h2.textContent = section.title;
+  h2.style.margin = "0";
+  headerRow.appendChild(h2);
+
+  const imageCount = section.blocks.filter((b) => b.type === "image").length;
+  if (imageCount > 0) {
+    const exportBtn = document.createElement("button");
+    exportBtn.className = "export-btn";
+    exportBtn.textContent = `Export ${imageCount} image${imageCount === 1 ? "" : "s"} as one long image`;
+    exportBtn.addEventListener("click", () => exportImagesAsLongImage(section, exportBtn));
+    headerRow.appendChild(exportBtn);
+  }
+  panel.appendChild(headerRow);
+
+  if (section.blocks.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.textContent = "No content yet - add an image, video, or text block below.";
+    panel.appendChild(empty);
+  }
+
+  section.blocks.forEach((block, i) => {
+    panel.appendChild(renderBlockCard(section, block, i));
+  });
+
+  panel.appendChild(renderAddForms(section));
+}
+
+function renderBlockCard(section, block, index) {
+  const card = document.createElement("div");
+  card.className = "block-card";
+
+  // Only the handle is draggable (not the whole card) so dragging inside
+  // the caption/textarea fields still does normal text selection instead
+  // of picking up the card.
+  const handle = document.createElement("div");
+  handle.className = "drag-handle-block";
+  handle.textContent = "⠿";
+  handle.title = "Drag to reorder";
+  handle.draggable = true;
+  handle.addEventListener("dragstart", (e) => {
+    draggedBlockIndex = index;
+    card.classList.add("dragging");
+    e.dataTransfer.effectAllowed = "move";
+  });
+  handle.addEventListener("dragend", () => {
+    card.classList.remove("dragging");
+    card.parentElement.querySelectorAll(".drag-over").forEach((el) => el.classList.remove("drag-over"));
+  });
+  card.appendChild(handle);
+  card.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    card.classList.add("drag-over");
+  });
+  card.addEventListener("dragleave", () => card.classList.remove("drag-over"));
+  card.addEventListener("drop", (e) => {
+    e.preventDefault();
+    card.classList.remove("drag-over");
+    if (draggedBlockIndex === null || draggedBlockIndex === index) return;
+    reorderBlocksByDrag(section, draggedBlockIndex, index);
+    draggedBlockIndex = null;
+  });
+
+  const preview = document.createElement("div");
+  preview.className = "preview";
+  if (block.type === "image") {
+    const img = document.createElement("img");
+    img.src = block.url;
+    img.style.cursor = "zoom-in";
+    img.addEventListener("click", () => openLightbox(block.url, "image"));
+    preview.appendChild(img);
+    const viewBtn = document.createElement("button");
+    viewBtn.type = "button";
+    viewBtn.className = "view-full-btn";
+    viewBtn.textContent = "View full size";
+    viewBtn.addEventListener("click", () => openLightbox(block.url, "image"));
+    preview.appendChild(viewBtn);
+  } else if (block.type === "video") {
+    const video = document.createElement("video");
+    video.src = block.url;
+    video.controls = true;
+    preview.appendChild(video);
+    const viewBtn = document.createElement("button");
+    viewBtn.type = "button";
+    viewBtn.className = "view-full-btn";
+    viewBtn.textContent = "View full size";
+    viewBtn.addEventListener("click", () => openLightbox(block.url, "video"));
+    preview.appendChild(viewBtn);
+  } else {
+    preview.classList.add("text-preview");
+    preview.textContent = block.text;
+  }
+  card.appendChild(preview);
+
+  const fields = document.createElement("div");
+  fields.className = "fields";
+
+  if (block.type === "text") {
+    const toolbar = createStyleToolbar(block.style);
+    fields.appendChild(toolbar.element);
+
+    const textarea = document.createElement("textarea");
+    textarea.value = block.text;
+    fields.appendChild(textarea);
+
+    const linkSelect = createLinkSelect(block.link);
+    fields.appendChild(linkSelect);
+
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    const saveBtn = document.createElement("button");
+    saveBtn.textContent = "Save";
+    saveBtn.addEventListener("click", () => updateBlock(block.id, {
+      text: textarea.value,
+      style: toolbar.getStyle(),
+      link: linkSelect.value || null,
+    }));
+    actions.appendChild(saveBtn);
+    appendMoveDelete(actions, section, index, block);
+    fields.appendChild(actions);
+  } else {
+    const captionInput = document.createElement("input");
+    captionInput.type = "text";
+    captionInput.placeholder = "Caption (optional)";
+    captionInput.value = block.caption || "";
+    fields.appendChild(captionInput);
+
+    const linkSelect = createLinkSelect(block.link);
+    fields.appendChild(linkSelect);
+
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    const saveBtn = document.createElement("button");
+    saveBtn.textContent = "Save";
+    saveBtn.addEventListener("click", () => updateBlock(block.id, {
+      caption: captionInput.value,
+      link: linkSelect.value || null,
+    }));
+    actions.appendChild(saveBtn);
+    appendMoveDelete(actions, section, index, block);
+    fields.appendChild(actions);
+  }
+
+  card.appendChild(fields);
+  return card;
+}
+
+function appendMoveDelete(actions, section, index, block) {
+  const up = document.createElement("button");
+  up.textContent = "↑";
+  up.disabled = index === 0;
+  up.addEventListener("click", () => moveBlock(section, index, -1));
+  actions.appendChild(up);
+
+  const down = document.createElement("button");
+  down.textContent = "↓";
+  down.disabled = index === section.blocks.length - 1;
+  down.addEventListener("click", () => moveBlock(section, index, 1));
+  actions.appendChild(down);
+
+  const del = document.createElement("button");
+  del.textContent = "Delete";
+  del.className = "danger";
+  del.addEventListener("click", () => deleteBlock(block.id));
+  actions.appendChild(del);
+}
+
+async function applyBlockOrder(section, order) {
+  try {
+    await api("/admin/api/sections/" + section.slug + "/blocks/reorder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ order }),
+    });
+    await loadContent();
+  } catch (e) { showToast(e.message, false); }
+}
+
+async function moveBlock(section, index, delta) {
+  const order = section.blocks.map((b) => b.id);
+  const target = index + delta;
+  if (target < 0 || target >= order.length) return;
+  [order[index], order[target]] = [order[target], order[index]];
+  await applyBlockOrder(section, order);
+}
+
+let draggedBlockIndex = null;
+
+function reorderBlocksByDrag(section, fromIndex, toIndex) {
+  const order = section.blocks.map((b) => b.id);
+  const [moved] = order.splice(fromIndex, 1);
+  order.splice(toIndex, 0, moved);
+  applyBlockOrder(section, order);
+}
+
+async function updateBlock(blockId, payload) {
+  try {
+    await api("/admin/api/blocks/" + blockId, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    showToast("Saved", true);
+    await loadContent();
+  } catch (e) { showToast(e.message, false); }
+}
+
+async function deleteBlock(blockId) {
+  if (!confirm("Delete this block?")) return;
+  try {
+    await api("/admin/api/blocks/" + blockId, { method: "DELETE" });
+    await loadContent();
+    showToast("Deleted", true);
+  } catch (e) { showToast(e.message, false); }
+}
+
+function renderAddForms(section) {
+  const wrap = document.createElement("div");
+  wrap.className = "add-block-forms";
+
+  const mediaForm = document.createElement("form");
+  mediaForm.innerHTML = `
+    <h3>Add images or videos</h3>
+    <input type="file" name="file" accept="image/*,video/*" multiple required>
+    <input type="text" name="caption" placeholder="Caption (optional, applied to all selected files)">
+    <button type="submit">Upload</button>
+  `;
+  const mediaLinkSelect = createLinkSelect(null);
+  mediaForm.insertBefore(mediaLinkSelect, mediaForm.querySelector('button[type="submit"]'));
+  mediaForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fileInput = mediaForm.querySelector('input[name="file"]');
+    const captionInput = mediaForm.querySelector('input[name="caption"]');
+    const files = Array.from(fileInput.files);
+    if (files.length === 0) return;
+    const submitBtn = mediaForm.querySelector('button[type="submit"]');
+    submitBtn.disabled = true;
+    let uploaded = 0;
+    let failed = 0;
+    for (const file of files) {
+      submitBtn.textContent = `Uploading ${uploaded + failed + 1}/${files.length}...`;
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("caption", captionInput.value);
+      formData.append("link", mediaLinkSelect.value);
+      try {
+        await api("/admin/api/sections/" + section.slug + "/media", { method: "POST", body: formData });
+        uploaded++;
+      } catch (err) {
+        failed++;
+      }
+    }
+    submitBtn.disabled = false;
+    submitBtn.textContent = "Upload";
+    if (failed === 0) {
+      showToast(`Uploaded ${uploaded} file${uploaded === 1 ? "" : "s"}`, true);
+    } else {
+      showToast(`Uploaded ${uploaded}, failed ${failed}`, false);
+    }
+    await loadContent();
+  });
+  wrap.appendChild(mediaForm);
+
+  const textForm = document.createElement("form");
+  textForm.innerHTML = `
+    <h3>Add text block</h3>
+    <textarea name="text" placeholder="Instructional text" required></textarea>
+    <button type="submit">Add text</button>
+  `;
+  const textToolbar = createStyleToolbar(null);
+  textForm.insertBefore(textToolbar.element, textForm.querySelector("textarea"));
+  const textLinkSelect = createLinkSelect(null);
+  textForm.insertBefore(textLinkSelect, textForm.querySelector('button[type="submit"]'));
+  textForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const textarea = textForm.querySelector('textarea[name="text"]');
+    if (!textarea.value.trim()) return;
+    try {
+      await api("/admin/api/sections/" + section.slug + "/text", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: textarea.value.trim(),
+          style: textToolbar.getStyle(),
+          link: textLinkSelect.value || null,
+        }),
+      });
+      showToast("Added", true);
+      await loadContent();
+    } catch (e) { showToast(e.message, false); }
+  });
+  wrap.appendChild(textForm);
+
+  return wrap;
+}
+
+document.getElementById("logoutBtn").addEventListener("click", async () => {
+  await fetch("/admin/logout", { method: "POST" });
+  window.location.href = "/admin/login";
+});
+
+loadContent().catch((e) => showToast(e.message, false));
+</script>
+</body>
+</html>

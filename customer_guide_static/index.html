@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GME App Guide</title>
+<style>
+  :root {
+    --bg: #f4f5f7;
+    --card-bg: #ffffff;
+    --border: #e1e4e8;
+    --text: #1a1d21;
+    --text-muted: #6b7280;
+    --accent: #2563eb;
+    --accent-hover: #1d4ed8;
+    --accent-bg: #eff6ff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17181c;
+      --card-bg: #202127;
+      --border: #33343b;
+      --text: #e8e9ec;
+      --text-muted: #9aa0aa;
+      --accent-bg: #1c2b4d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  }
+  header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--card-bg);
+  }
+  header h1 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+  }
+  .layout {
+    display: flex;
+    max-width: 1100px;
+    margin: 0 auto;
+    min-height: calc(100vh - 57px);
+  }
+  nav.sidebar {
+    width: 240px;
+    flex-shrink: 0;
+    border-right: 1px solid var(--border);
+    padding: 16px 10px;
+  }
+  nav.sidebar button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    color: var(--text);
+    font-size: 14.5px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    margin-bottom: 4px;
+  }
+  nav.sidebar button:hover { background: var(--accent-bg); }
+  nav.sidebar button.active {
+    background: var(--accent-bg);
+    color: var(--accent);
+    font-weight: 600;
+  }
+  main {
+    flex: 1;
+    padding: 24px 28px;
+    min-width: 0;
+  }
+  main h2 {
+    margin: 0;
+    font-size: 22px;
+  }
+  .content-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 18px;
+  }
+  .export-btn {
+    font-size: 13px;
+    font-weight: 600;
+    padding: 9px 14px;
+    min-height: 40px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+    color: var(--accent);
+    cursor: pointer;
+  }
+  .export-btn:hover { background: var(--accent-bg); }
+  .export-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+  .block {
+    margin-bottom: 22px;
+  }
+  .block img, .block video {
+    max-width: 100%;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    display: block;
+  }
+  .block p.text {
+    font-size: 15px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    margin: 0;
+  }
+  .block .caption {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-top: 6px;
+  }
+  .block.linked {
+    cursor: pointer;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    margin: -8px;
+    padding: 8px;
+    transition: background 0.15s;
+  }
+  .block.linked:hover {
+    background: var(--accent-bg);
+  }
+  .block .link-hint {
+    font-size: 12.5px;
+    color: var(--accent);
+    margin-top: 6px;
+    font-weight: 600;
+  }
+  .empty-state {
+    color: var(--text-muted);
+    font-size: 14px;
+    padding: 24px 0;
+  }
+  @media (max-width: 768px) {
+    .layout { flex-direction: column; min-height: 0; }
+    nav.sidebar {
+      width: 100%;
+      border-right: none;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      padding: 10px;
+      gap: 6px;
+      /* Fades both edges so a row of topics wider than the screen still
+         reads as horizontally scrollable even before the user touches it. */
+      -webkit-mask-image: linear-gradient(to right, transparent, black 14px, black calc(100% - 14px), transparent);
+      mask-image: linear-gradient(to right, transparent, black 14px, black calc(100% - 14px), transparent);
+    }
+    nav.sidebar button {
+      width: auto;
+      white-space: nowrap;
+      margin-bottom: 0;
+      min-height: 44px;
+      display: flex;
+      align-items: center;
+      padding: 10px 16px;
+    }
+    main { padding: 20px; }
+    .block img, .block video { border-radius: 8px; }
+    .export-btn { width: 100%; min-height: 44px; }
+  }
+</style>
+</head>
+<body>
+<header><h1>GME App Guide</h1></header>
+<div class="layout">
+  <nav class="sidebar" id="sidebar"></nav>
+  <main id="main"><div class="empty-state">Loading&hellip;</div></main>
+</div>
+<script>
+let sections = [];
+
+async function exportImagesAsLongImage(section, button) {
+  const imageBlocks = section.blocks.filter((b) => b.type === "image");
+  if (imageBlocks.length === 0) return;
+
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = "Preparing...";
+
+  try {
+    const images = await Promise.all(imageBlocks.map((block) => new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error("Couldn't load an image"));
+      img.src = block.url;
+    })));
+
+    const targetWidth = Math.min(1080, Math.max(...images.map((img) => img.naturalWidth)));
+    const scaledHeights = images.map((img) => Math.round(img.naturalHeight * (targetWidth / img.naturalWidth)));
+    const totalHeight = scaledHeights.reduce((sum, h) => sum + h, 0);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = targetWidth;
+    canvas.height = totalHeight;
+    const ctx = canvas.getContext("2d");
+    let y = 0;
+    images.forEach((img, i) => {
+      ctx.drawImage(img, 0, y, targetWidth, scaledHeights[i]);
+      y += scaledHeights[i];
+    });
+
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const slug = (section.title || "topic").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "topic";
+    a.download = "gme-app-guide-" + slug + ".png";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
+}
+
+function render(activeSlug) {
+  const sidebar = document.getElementById("sidebar");
+  sidebar.innerHTML = "";
+  sections.forEach((s) => {
+    const btn = document.createElement("button");
+    btn.textContent = s.title;
+    btn.className = s.slug === activeSlug ? "active" : "";
+    btn.addEventListener("click", () => {
+      window.location.hash = s.slug;
+    });
+    sidebar.appendChild(btn);
+  });
+
+  const main = document.getElementById("main");
+  const section = sections.find((s) => s.slug === activeSlug) || sections[0];
+  if (!section) {
+    main.innerHTML = '<div class="empty-state">No topics yet.</div>';
+    return;
+  }
+  main.innerHTML = "";
+  const headerRow = document.createElement("div");
+  headerRow.className = "content-header-row";
+  const h2 = document.createElement("h2");
+  h2.textContent = section.title;
+  headerRow.appendChild(h2);
+
+  const imageCount = section.blocks.filter((b) => b.type === "image").length;
+  if (imageCount > 0) {
+    const exportBtn = document.createElement("button");
+    exportBtn.className = "export-btn";
+    exportBtn.textContent = `Save all ${imageCount} image${imageCount === 1 ? "" : "s"} as one image`;
+    exportBtn.addEventListener("click", () => exportImagesAsLongImage(section, exportBtn));
+    headerRow.appendChild(exportBtn);
+  }
+  main.appendChild(headerRow);
+
+  if (section.blocks.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.textContent = "Content coming soon.";
+    main.appendChild(empty);
+    return;
+  }
+
+  const FONT_SIZE_PX = { small: "13px", normal: "15px", large: "19px", xlarge: "24px" };
+
+  section.blocks.forEach((block) => {
+    const wrap = document.createElement("div");
+    wrap.className = "block";
+    if (block.type === "image") {
+      const img = document.createElement("img");
+      img.src = block.url;
+      img.alt = block.caption || section.title;
+      wrap.appendChild(img);
+    } else if (block.type === "video") {
+      const video = document.createElement("video");
+      video.src = block.url;
+      video.controls = true;
+      wrap.appendChild(video);
+    } else {
+      const p = document.createElement("p");
+      p.className = "text";
+      p.textContent = block.text;
+      const style = block.style || {};
+      p.style.fontWeight = style.bold ? "700" : "400";
+      p.style.fontStyle = style.italic ? "italic" : "normal";
+      p.style.textAlign = style.align || "left";
+      p.style.fontSize = FONT_SIZE_PX[style.fontSize] || FONT_SIZE_PX.normal;
+      if (style.color) p.style.color = style.color;
+      wrap.appendChild(p);
+    }
+    if (block.caption) {
+      const cap = document.createElement("div");
+      cap.className = "caption";
+      cap.textContent = block.caption;
+      wrap.appendChild(cap);
+    }
+    if (block.link) {
+      const target = sections.find((s) => s.slug === block.link);
+      if (target) {
+        const goToTarget = () => { window.location.hash = block.link; };
+        // Video already has its own click targets (play/pause/scrub), so
+        // only the hint text navigates there; image/text blocks have no
+        // competing click behavior, so the whole card is clickable.
+        if (block.type !== "video") {
+          wrap.classList.add("linked");
+          wrap.addEventListener("click", goToTarget);
+        }
+        const hint = document.createElement("div");
+        hint.className = "link-hint";
+        hint.textContent = "→ See: " + target.title;
+        if (block.type === "video") {
+          hint.style.cursor = "pointer";
+          hint.addEventListener("click", goToTarget);
+        }
+        wrap.appendChild(hint);
+      }
+    }
+    main.appendChild(wrap);
+  });
+}
+
+async function load() {
+  const resp = await fetch("/api/content");
+  const data = await resp.json();
+  sections = data.sections || [];
+  const initial = window.location.hash.replace("#", "") || (sections[0] && sections[0].slug);
+  render(initial);
+}
+
+window.addEventListener("hashchange", () => {
+  render(window.location.hash.replace("#", ""));
+});
+
+load();
+</script>
+</body>
+</html>
