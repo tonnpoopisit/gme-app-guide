@@ -1,20 +1,43 @@
 ---
 name: customer-guide-deploy
-description: Deploys/maintains the GME customer app guide (customer_guide_server.py, a Flask app teaching customers how to use the GME remittance app - registration, 4-digit code, autodebit+3-digit code, add receiver, send money, limitations) to Google Cloud Run, backed by a Cloud Storage bucket for persistent data. Covers the full first-deploy runbook (enable APIs, create bucket, migrate content, grant IAM, deploy) plus every gotcha hit getting gcloud working on Windows (ESET SSL interception, PowerShell execution policy blocking gcloud.ps1, setx's 1024-char truncation, Cloud Run's 32MB HTTP/1 upload limit). Use this skill whenever the user asks to deploy, redeploy, or troubleshoot this app on Cloud Run, asks about its Cloud Storage-backed data layer, or hits gcloud CLI setup problems on Windows.
+description: Deploys/maintains the GME customer app guide (customer_guide_server.py, a Flask app teaching customers how to use the GME remittance app - registration, 4-digit code, autodebit+3-digit code, add receiver, send money, limitations - across multiple corridors, currently Laos and Thailand) to Google Cloud Run, backed by a Cloud Storage bucket for persistent data. Covers the full first-deploy runbook (enable APIs, create bucket, migrate content, grant IAM, deploy), the admin's English-to-Thai/Lao translate-on-demand feature (Google Cloud Translation API, needs GOOGLE_TRANSLATE_API_KEY), plus every gotcha hit getting gcloud working on Windows (ESET SSL interception, PowerShell execution policy blocking gcloud.ps1, setx's 1024-char truncation, Cloud Run's 32MB HTTP/1 upload limit). Use this skill whenever the user asks to deploy, redeploy, or troubleshoot this app on Cloud Run, asks about corridors/translation, its Cloud Storage-backed data layer, or hits gcloud CLI setup problems on Windows.
 ---
 
 # Customer Guide - Cloud Run Deployment
 
 ## What this app is
 
-A public, no-login customer-facing site (`customer_guide_server.py` + `customer_guide_static/`) with an admin CMS behind a single PIN, teaching GME app customers how to register, use the 4-digit verification code, set up autodebit (3-digit code), add a receiver, send money, and understand limits. Admin can add/rename/reorder topics and upload/reorder/caption images and videos, with block-level text styling (bold/italic/size/color/align) and cross-topic links. See the code comments in `customer_guide_server.py` for the full data model.
+A public, no-login customer-facing site (`customer_guide_server.py` + `customer_guide_static/`) with an admin CMS behind a single PIN, teaching GME app customers how to register, use the 4-digit verification code, set up autodebit (3-digit code), add a receiver, send money, and understand limits. Content is organized into **corridors** (currently Laos and Thailand, each with its own language - `lo`/`th`) - customers switch between them with a top-of-page toggle; each corridor has its own independent topic list. Admin can add/rename/reorder both corridors and topics, upload/reorder/caption images and videos, block-level text styling (bold/italic/size/color/align), cross-topic links (scoped within a corridor), and a **Translate** button on every text field (title/caption/text) that sends admin-typed English through Google Cloud Translation API into that corridor's language - skipped automatically (client-side Unicode script detection) if the admin already typed Thai/Lao directly. See the code comments in `customer_guide_server.py` for the full data model.
+
+## Data model
+
+```json
+{"corridors": [
+  {"id": "laos", "label": "Laos", "lang": "lo", "sections": [
+    {"slug": "registration", "title": "Registration", "blocks": [...]}
+  ]},
+  {"id": "thailand", "label": "Thailand", "lang": "th", "sections": [...]}
+]}
+```
+
+Array order *is* display order at every level (corridors, sections, blocks) - no separate "order" field. Corridor/section renames regenerate the `id`/`slug` and physically move the corresponding `customer_guide_uploads/` subfolder - see `admin_rename_corridor`/`admin_rename_section` in `customer_guide_server.py`.
+
+## Enabling translation
+
+Not required to deploy/run the app - without `GOOGLE_TRANSLATE_API_KEY` set, the Translate button just shows a clear "not configured" error and everything else works normally. To enable it:
+
+1. In the GCP Console (no gcloud CLI needed - just the browser, sidesteps the ESET issues below entirely): APIs & Services → Library → enable **Cloud Translation API** (may prompt to attach a billing account - free tier covers a lot of typical admin usage).
+2. APIs & Services → Credentials → Create Credentials → API key. Optionally restrict it to just the Cloud Translation API.
+3. Set `GOOGLE_TRANSLATE_API_KEY=<the key>` as an env var - locally for testing, and add it to the `--set-env-vars` list in the Cloud Run deploy command below for production.
+
+Endpoint: `POST /admin/api/translate` `{text, target: "th"|"lo"}` -> `{translatedText}`, a thin server-side proxy so the key never reaches the browser (see `admin_translate` in `customer_guide_server.py`).
 
 ## Architecture: why Cloud Run needs a storage change
 
 Cloud Run containers are stateless - local disk writes don't survive a redeploy or a scale-to-zero/cold-start cycle. The app's two pieces of real state:
 
-- **Content** (`customer_guide_content.json` - topics + ordered blocks)
-- **Uploaded media** (`customer_guide_uploads/<slug>/<uuid>.<ext>`)
+- **Content** (`customer_guide_content.json` - corridors -> topics -> ordered blocks)
+- **Uploaded media** (`customer_guide_uploads/<corridor-id>/<section-slug>/<uuid>.<ext>`)
 
 ...are controlled by `DATA_DIR`, an env var read once at startup:
 
@@ -44,7 +67,7 @@ Placeholders below: `PROJECT_ID`, `PROJECT_NUMBER`, `REGION` (recommended `asia-
    gcloud.cmd storage buckets create gs://BUCKET_NAME --project=PROJECT_ID --location=REGION
    ```
 
-3. **Migrate existing content into it** (one-time, only needed if there's pre-existing local content from testing before the app moved to Cloud Run):
+3. **Migrate existing content into it** (one-time, only needed if there's pre-existing local content from testing before the app moved to Cloud Run - `customer_guide_uploads/` is corridor-nested now, e.g. `customer_guide_uploads/laos/registration/...`, so this copies the whole tree as-is):
    ```powershell
    gcloud.cmd storage cp "customer_guide_content.json" gs://BUCKET_NAME/customer_guide_content.json
    gcloud.cmd storage cp -r "customer_guide_uploads\*" gs://BUCKET_NAME/customer_guide_uploads/
@@ -57,7 +80,7 @@ Placeholders below: `PROJECT_ID`, `PROJECT_NUMBER`, `REGION` (recommended `asia-
 
 5. **Deploy** (run from inside this repo - `.gcloudignore` scopes what gets uploaded as build context):
    ```powershell
-   gcloud.cmd run deploy app-guide --source . --region=REGION --allow-unauthenticated --memory=1Gi --max-instances=1 --add-volume=name=data,type=cloud-storage,bucket=BUCKET_NAME --add-volume-mount=volume=data,mount-path=/data --set-env-vars=DATA_DIR=/data,ADMIN_PIN=<pick-a-fresh-pin>,SECRET_KEY=<generate-fresh: python -c "import secrets; print(secrets.token_hex(32))">
+   gcloud.cmd run deploy app-guide --source . --region=REGION --allow-unauthenticated --memory=1Gi --max-instances=1 --add-volume=name=data,type=cloud-storage,bucket=BUCKET_NAME --add-volume-mount=volume=data,mount-path=/data --set-env-vars=DATA_DIR=/data,ADMIN_PIN=<pick-a-fresh-pin>,SECRET_KEY=<generate-fresh: python -c "import secrets; print(secrets.token_hex(32))">,GOOGLE_TRANSLATE_API_KEY=<optional-see-below>
    ```
    - `--max-instances=1`: sidesteps GCS FUSE's lack of cross-instance write locking - fine for this traffic level (Cloud Run still handles many concurrent requests within one instance).
    - `--memory=1Gi`: GCS FUSE stages writes fully in memory; default 512Mi is too tight once video uploads are in play.
@@ -101,9 +124,11 @@ These all showed up getting `gcloud` working on a Windows machine running **ESET
 
 5. **`gcloud run deploy --source .`** uploads the whole current directory as build context (minus `.gcloudignore` exclusions) - if this repo ever gets nested inside a larger working directory that has unrelated secrets/files again, re-add a deny-all-then-allow-list `.gcloudignore` like this repo's, don't rely on `.gitignore` semantics alone.
 
-## Progress as of last session (2026-08-22, work PC with ESET)
+## Progress as of last session (2026-08-24, work PC with ESET)
 
 - GCP project created: `gme-related-project` (number `217749099623`), personal (not GME-org) Google account.
 - Got as far as `gcloud config list` showing the account correctly, but `project` wasn't persisted and `gcloud config set project ...` then hit the stricter ESET cert error.
-- Bucket/IAM/migrate/deploy commands above were prepared but **not yet run**.
+- Bucket/IAM/migrate/deploy commands above were prepared but **not yet run** - still true, no Cloud Run deploy has happened yet as of this update.
+- Corridors + translation shipped locally since then (this repo is up to date) - the local `customer_guide_content.json`/`customer_guide_uploads/` on the work PC now has real Laos data (12 topics, 44 blocks) plus an empty, ready-to-fill Thailand corridor mirroring the same 12 topic names. That data was zipped separately (not in this repo - see chat history) for transfer to the personal PC; migrate it into the bucket at step 3 above once gcloud is working there.
+- Translation not yet enabled (no `GOOGLE_TRANSLATE_API_KEY` set anywhere) - the button is fully wired up client- and server-side, just needs the key (see "Enabling translation" above) whenever that's wanted.
 - User is switching to a personal PC (presumably without ESET) to continue - try the plain runbook there first; only pull in the gotchas section if the same errors resurface.

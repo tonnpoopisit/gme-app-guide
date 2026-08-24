@@ -2,10 +2,11 @@
 """
 customer_guide_server.py
 
-Public customer-facing "how to use the app" guide - sidebar of topics
-(Registration, 4-digit code, Autodebit + 3-digit code, Add receiver, Send
-money, Limitations), each holding an admin-managed, ordered list of
-images/videos/text blocks.
+Public customer-facing "how to use the app" guide - a corridor switcher
+(Laos / Thailand, each independently manageable), each corridor holding its
+own topic list (Registration, 4-digit code, Autodebit + 3-digit code, Add
+receiver, Send money, Limitations, etc.), each topic holding an
+admin-managed, ordered list of images/videos/text blocks.
 
 Two audiences, two access models:
   - Customers: every /api/content read and every /media/* file is open, no
@@ -15,20 +16,29 @@ Two audiences, two access models:
     role). Auth skeleton (hash/salt/lockout/session) is the same shape as
     dashboard_server.py / sim_registration_server.py, just single-tier.
 
-Content lives in customer_guide_content.json (section list, each with an
-ordered blocks list - array order *is* display order, no separate "order"
-field to keep in sync). Uploaded media lives under
-customer_guide_uploads/<section-slug>/<uuid>.<ext> and is served through
-/media/<slug>/<filename> rather than raw static hosting, so uploads stay
-extension/size-validated on the way in (same spirit as
-sim_registration_server.py's document-photo validation).
+Content lives in customer_guide_content.json:
+    {"corridors": [{"id", "label", "lang", "sections": [{"slug", "title",
+     "blocks": [...]}]}]}
+Array order *is* display order at every level (corridors, sections, blocks)
+- no separate "order" field to keep in sync. Uploaded media lives under
+customer_guide_uploads/<corridor-id>/<section-slug>/<uuid>.<ext> and is
+served through /media/<corridor-id>/<slug>/<filename> rather than raw
+static hosting, so uploads stay extension/size-validated on the way in
+(same spirit as sim_registration_server.py's document-photo validation).
+
+Each corridor has a `lang` (currently "th" or "lo") used by the admin
+translate-on-demand feature (see /admin/api/translate): admin content is
+typically typed in English and translated to that corridor's language via
+Google Cloud Translation API, client-side script-detection skips the round
+trip when the admin already typed Thai/Lao directly.
 
 Run locally:
     py customer_guide_server.py
 Then open http://127.0.0.1:5153 (customer view) - the admin PIN is printed
 to the console on first run, same as the other tools. For deployment, PORT/
-ADMIN_PIN/SECRET_KEY can be supplied via environment variables (see the
-Auth and __main__ sections below) instead of the local auto-generated files.
+ADMIN_PIN/SECRET_KEY/DATA_DIR/GOOGLE_TRANSLATE_API_KEY can be supplied via
+environment variables (see the Auth and __main__ sections below) instead of
+the local auto-generated files.
 """
 import hashlib
 import json
@@ -38,6 +48,8 @@ import secrets
 import shutil
 import threading
 import time
+import urllib.error
+import urllib.request
 import uuid
 from pathlib import Path
 
@@ -46,9 +58,9 @@ from flask import Flask, jsonify, request, send_file, abort, redirect, session
 PROJECT_ROOT = Path(__file__).parent
 STATIC_DIR = PROJECT_ROOT / "customer_guide_static"
 
-# DATA_DIR is where the actual content (topics/blocks JSON + uploaded media)
-# lives. Locally this defaults to the project folder itself, same as
-# before. On Cloud Run - where the container filesystem is wiped on every
+# DATA_DIR is where the actual content (corridors/topics/blocks JSON +
+# uploaded media) lives. Locally this defaults to the project folder
+# itself. On Cloud Run - where the container filesystem is wiped on every
 # cold start - this gets pointed at a Cloud Storage FUSE volume mount (e.g.
 # DATA_DIR=/data) so uploads and edits actually persist between deploys and
 # scale-to-zero cycles. AUTH_PATH/SECRET_KEY_PATH deliberately stay off
@@ -73,6 +85,8 @@ ALLOWED_FONT_SIZES = {"small", "normal", "large", "xlarge"}
 ALLOWED_ALIGN = {"left", "center", "right"}
 COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 DEFAULT_STYLE = {"bold": False, "italic": False, "color": None, "fontSize": "normal", "align": "left"}
+
+ALLOWED_LANGS = {"th": "Thai", "lo": "Lao"}
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES + 1024 * 1024  # small headroom for multipart overhead
@@ -133,6 +147,8 @@ def _load_or_create_secret_key() -> str:
 
 AUTH = _load_or_create_auth()
 app.secret_key = _load_or_create_secret_key()
+
+GOOGLE_TRANSLATE_API_KEY = os.environ.get("GOOGLE_TRANSLATE_API_KEY")
 
 _login_attempts = {}
 _login_attempts_lock = threading.Lock()
@@ -212,7 +228,7 @@ def admin_whoami():
 
 def _load_content() -> dict:
     if not CONTENT_PATH.exists():
-        return {"sections": []}
+        return {"corridors": []}
     return json.loads(CONTENT_PATH.read_text(encoding="utf-8"))
 
 
@@ -222,7 +238,7 @@ def _save_content(content: dict):
 
 def _slugify(title: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", title.strip().lower()).strip("-")
-    return slug or "section"
+    return slug or "item"
 
 
 def _unique_slug(base_slug: str, existing_slugs: set) -> str:
@@ -234,17 +250,24 @@ def _unique_slug(base_slug: str, existing_slugs: set) -> str:
     return f"{base_slug}-{n}"
 
 
-def _find_section(content: dict, slug: str) -> dict | None:
-    return next((s for s in content["sections"] if s["slug"] == slug), None)
+def _find_corridor(content: dict, corridor_id: str) -> dict | None:
+    return next((c for c in content["corridors"] if c["id"] == corridor_id), None)
 
 
-def _find_block(content: dict, block_id: str) -> tuple[dict, dict] | tuple[None, None]:
-    """Returns (section, block) for the section owning block_id, or (None, None)."""
-    for section in content["sections"]:
-        for block in section["blocks"]:
-            if block["id"] == block_id:
-                return section, block
-    return None, None
+def _find_section(corridor: dict, slug: str) -> dict | None:
+    return next((s for s in corridor["sections"] if s["slug"] == slug), None)
+
+
+def _find_block(content: dict, block_id: str):
+    """Returns (corridor, section, block) for the corridor/section owning
+    block_id, or (None, None, None). Block ids are globally unique (uuid4),
+    so this is the only lookup that needs to search every corridor."""
+    for corridor in content["corridors"]:
+        for section in corridor["sections"]:
+            for block in section["blocks"]:
+                if block["id"] == block_id:
+                    return corridor, section, block
+    return None, None, None
 
 
 def _validate_style(raw: dict) -> dict:
@@ -259,18 +282,17 @@ def _validate_style(raw: dict) -> dict:
     }
 
 
-def _validate_link(raw_link, content: dict) -> str | None:
-    """A link only ever points at one of THIS guide's own topic sections
-    (picked from a dropdown, never typed in) - so the only validation
-    needed is confirming that section still exists, not general URL
-    sanitization."""
+def _validate_link(raw_link, corridor: dict) -> str | None:
+    """A link only ever points at another topic within the SAME corridor
+    (picked from a dropdown, never typed in) - cross-corridor links don't
+    make sense since a customer views one corridor at a time."""
     if not raw_link:
         return None
-    valid_slugs = {s["slug"] for s in content["sections"]}
+    valid_slugs = {s["slug"] for s in corridor["sections"]}
     return raw_link if raw_link in valid_slugs else None
 
 
-def _block_public_view(section_slug: str, block: dict) -> dict:
+def _block_public_view(corridor_id: str, section_slug: str, block: dict) -> dict:
     view = {
         "id": block["id"],
         "type": block["type"],
@@ -281,7 +303,7 @@ def _block_public_view(section_slug: str, block: dict) -> dict:
         view["text"] = block.get("text", "")
         view["style"] = block.get("style") or DEFAULT_STYLE
     else:
-        view["url"] = f"/media/{section_slug}/{block['filename']}"
+        view["url"] = f"/media/{corridor_id}/{section_slug}/{block['filename']}"
     return view
 
 
@@ -302,24 +324,32 @@ def api_content():
 
 def _content_public_view() -> dict:
     content = _load_content()
-    sections = [
+    corridors = [
         {
-            "slug": s["slug"],
-            "title": s["title"],
-            "blocks": [_block_public_view(s["slug"], b) for b in s["blocks"]],
+            "id": c["id"],
+            "label": c["label"],
+            "lang": c["lang"],
+            "sections": [
+                {
+                    "slug": s["slug"],
+                    "title": s["title"],
+                    "blocks": [_block_public_view(c["id"], s["slug"], b) for b in s["blocks"]],
+                }
+                for s in c["sections"]
+            ],
         }
-        for s in content["sections"]
+        for c in content["corridors"]
     ]
-    return {"sections": sections}
+    return {"corridors": corridors}
 
 
-@app.route("/media/<slug>/<filename>")
-def media(slug, filename):
+@app.route("/media/<corridor_id>/<slug>/<filename>")
+def media(corridor_id, slug, filename):
     # filename is always a server-generated uuid+ext (see _save_upload), so
     # no user-controlled path segments ever reach the filesystem lookup.
     if "/" in filename or "\\" in filename or ".." in filename:
         abort(404)
-    file_path = UPLOADS_DIR / slug / filename
+    file_path = UPLOADS_DIR / corridor_id / slug / filename
     if not file_path.is_file():
         abort(404)
     return send_file(str(file_path))
@@ -340,8 +370,124 @@ def admin_api_content():
     return jsonify(_content_public_view())
 
 
-@app.route("/admin/api/sections", methods=["POST"])
-def admin_create_section():
+@app.route("/admin/api/translate", methods=["POST"])
+def admin_translate():
+    """Thin proxy to Google Cloud Translation API v2, kept server-side so
+    the API key never reaches the browser. Deliberately dumb: the client
+    (admin.html) does its own script-detection to decide whether a
+    translation is even needed (typing directly in Thai/Lao skips this
+    entirely) - this endpoint just translates whatever text it's given."""
+    if not GOOGLE_TRANSLATE_API_KEY:
+        return jsonify({"error": "Translation isn't configured - set the GOOGLE_TRANSLATE_API_KEY environment variable"}), 501
+
+    data = request.get_json(force=True, silent=True) or {}
+    text = str(data.get("text", "")).strip()
+    target = data.get("target")
+    if not text or target not in ALLOWED_LANGS:
+        return jsonify({"error": "text and a valid target ('th' or 'lo') are required"}), 400
+
+    payload = json.dumps({"q": text, "target": target, "format": "text"}).encode("utf-8")
+    req = urllib.request.Request(
+        f"https://translation.googleapis.com/language/translate/v2?key={GOOGLE_TRANSLATE_API_KEY}",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+        translated = result["data"]["translations"][0]["translatedText"]
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", errors="replace")
+        return jsonify({"error": f"Translation API error ({e.code}): {detail[:300]}"}), 502
+    except Exception as e:  # noqa: BLE001 - surfaced to the admin as-is, nothing sensitive in it
+        return jsonify({"error": f"Translation request failed: {e}"}), 502
+
+    return jsonify({"translatedText": translated})
+
+
+@app.route("/admin/api/corridors", methods=["POST"])
+def admin_create_corridor():
+    data = request.get_json(force=True, silent=True) or {}
+    label = str(data.get("label", "")).strip()
+    lang = data.get("lang")
+    if not label:
+        return jsonify({"error": "Label is required"}), 400
+    if lang not in ALLOWED_LANGS:
+        return jsonify({"error": "lang must be 'th' (Thai) or 'lo' (Lao)"}), 400
+
+    with _content_lock:
+        content = _load_content()
+        existing_ids = {c["id"] for c in content["corridors"]}
+        cid = _unique_slug(_slugify(label), existing_ids)
+        corridor = {"id": cid, "label": label, "lang": lang, "sections": []}
+        content["corridors"].append(corridor)
+        _save_content(content)
+    return jsonify(corridor)
+
+
+@app.route("/admin/api/corridors/<corridor_id>", methods=["PUT"])
+def admin_rename_corridor(corridor_id):
+    data = request.get_json(force=True, silent=True) or {}
+    new_label = str(data.get("label", "")).strip()
+    if not new_label:
+        return jsonify({"error": "Label is required"}), 400
+
+    with _content_lock:
+        content = _load_content()
+        corridor = _find_corridor(content, corridor_id)
+        if corridor is None:
+            return jsonify({"error": "Corridor not found"}), 404
+
+        other_ids = {c["id"] for c in content["corridors"] if c["id"] != corridor_id}
+        new_id = _unique_slug(_slugify(new_label), other_ids)
+
+        if new_id != corridor_id:
+            old_dir = UPLOADS_DIR / corridor_id
+            new_dir = UPLOADS_DIR / new_id
+            if old_dir.exists():
+                old_dir.rename(new_dir)
+            corridor["id"] = new_id
+        corridor["label"] = new_label
+        if data.get("lang") in ALLOWED_LANGS:
+            corridor["lang"] = data["lang"]
+        _save_content(content)
+    return jsonify(corridor)
+
+
+@app.route("/admin/api/corridors/<corridor_id>", methods=["DELETE"])
+def admin_delete_corridor(corridor_id):
+    with _content_lock:
+        content = _load_content()
+        corridor = _find_corridor(content, corridor_id)
+        if corridor is None:
+            return jsonify({"error": "Corridor not found"}), 404
+        if len(content["corridors"]) <= 1:
+            return jsonify({"error": "Can't delete the last remaining corridor"}), 400
+        content["corridors"] = [c for c in content["corridors"] if c["id"] != corridor_id]
+        _save_content(content)
+        shutil.rmtree(UPLOADS_DIR / corridor_id, ignore_errors=True)
+    return jsonify({"ok": True})
+
+
+@app.route("/admin/api/corridors/reorder", methods=["POST"])
+def admin_reorder_corridors():
+    data = request.get_json(force=True, silent=True) or {}
+    order = data.get("order", [])
+
+    with _content_lock:
+        content = _load_content()
+        current_ids = {c["id"] for c in content["corridors"]}
+        if set(order) != current_ids or len(order) != len(content["corridors"]):
+            return jsonify({"error": "Order must be a permutation of existing corridor ids"}), 400
+        by_id = {c["id"]: c for c in content["corridors"]}
+        content["corridors"] = [by_id[cid] for cid in order]
+        _save_content(content)
+    return jsonify({"ok": True})
+
+
+@app.route("/admin/api/corridors/<corridor_id>/sections", methods=["POST"])
+def admin_create_section(corridor_id):
     data = request.get_json(force=True, silent=True) or {}
     title = str(data.get("title", "")).strip()
     if not title:
@@ -349,16 +495,19 @@ def admin_create_section():
 
     with _content_lock:
         content = _load_content()
-        existing_slugs = {s["slug"] for s in content["sections"]}
+        corridor = _find_corridor(content, corridor_id)
+        if corridor is None:
+            return jsonify({"error": "Corridor not found"}), 404
+        existing_slugs = {s["slug"] for s in corridor["sections"]}
         slug = _unique_slug(_slugify(title), existing_slugs)
         section = {"slug": slug, "title": title, "blocks": []}
-        content["sections"].append(section)
+        corridor["sections"].append(section)
         _save_content(content)
     return jsonify(section)
 
 
-@app.route("/admin/api/sections/<slug>", methods=["PUT"])
-def admin_rename_section(slug):
+@app.route("/admin/api/corridors/<corridor_id>/sections/<slug>", methods=["PUT"])
+def admin_rename_section(corridor_id, slug):
     data = request.get_json(force=True, silent=True) or {}
     new_title = str(data.get("title", "")).strip()
     if not new_title:
@@ -366,16 +515,19 @@ def admin_rename_section(slug):
 
     with _content_lock:
         content = _load_content()
-        section = _find_section(content, slug)
+        corridor = _find_corridor(content, corridor_id)
+        if corridor is None:
+            return jsonify({"error": "Corridor not found"}), 404
+        section = _find_section(corridor, slug)
         if section is None:
             return jsonify({"error": "Section not found"}), 404
 
-        other_slugs = {s["slug"] for s in content["sections"] if s["slug"] != slug}
+        other_slugs = {s["slug"] for s in corridor["sections"] if s["slug"] != slug}
         new_slug = _unique_slug(_slugify(new_title), other_slugs)
 
         if new_slug != slug:
-            old_dir = UPLOADS_DIR / slug
-            new_dir = UPLOADS_DIR / new_slug
+            old_dir = UPLOADS_DIR / corridor_id / slug
+            new_dir = UPLOADS_DIR / corridor_id / new_slug
             if old_dir.exists():
                 old_dir.rename(new_dir)
             section["slug"] = new_slug
@@ -384,31 +536,37 @@ def admin_rename_section(slug):
     return jsonify(section)
 
 
-@app.route("/admin/api/sections/<slug>", methods=["DELETE"])
-def admin_delete_section(slug):
+@app.route("/admin/api/corridors/<corridor_id>/sections/<slug>", methods=["DELETE"])
+def admin_delete_section(corridor_id, slug):
     with _content_lock:
         content = _load_content()
-        section = _find_section(content, slug)
+        corridor = _find_corridor(content, corridor_id)
+        if corridor is None:
+            return jsonify({"error": "Corridor not found"}), 404
+        section = _find_section(corridor, slug)
         if section is None:
             return jsonify({"error": "Section not found"}), 404
-        content["sections"] = [s for s in content["sections"] if s["slug"] != slug]
+        corridor["sections"] = [s for s in corridor["sections"] if s["slug"] != slug]
         _save_content(content)
-        shutil.rmtree(UPLOADS_DIR / slug, ignore_errors=True)
+        shutil.rmtree(UPLOADS_DIR / corridor_id / slug, ignore_errors=True)
     return jsonify({"ok": True})
 
 
-@app.route("/admin/api/sections/reorder", methods=["POST"])
-def admin_reorder_sections():
+@app.route("/admin/api/corridors/<corridor_id>/sections/reorder", methods=["POST"])
+def admin_reorder_sections(corridor_id):
     data = request.get_json(force=True, silent=True) or {}
     order = data.get("order", [])
 
     with _content_lock:
         content = _load_content()
-        current_slugs = {s["slug"] for s in content["sections"]}
-        if set(order) != current_slugs or len(order) != len(content["sections"]):
+        corridor = _find_corridor(content, corridor_id)
+        if corridor is None:
+            return jsonify({"error": "Corridor not found"}), 404
+        current_slugs = {s["slug"] for s in corridor["sections"]}
+        if set(order) != current_slugs or len(order) != len(corridor["sections"]):
             return jsonify({"error": "Order must be a permutation of existing section slugs"}), 400
-        by_slug = {s["slug"]: s for s in content["sections"]}
-        content["sections"] = [by_slug[slug] for slug in order]
+        by_slug = {s["slug"]: s for s in corridor["sections"]}
+        corridor["sections"] = [by_slug[slug] for slug in order]
         _save_content(content)
     return jsonify({"ok": True})
 
@@ -422,8 +580,8 @@ def _ext_and_type(filename: str) -> tuple[str, str] | tuple[None, None]:
     return None, None
 
 
-@app.route("/admin/api/sections/<slug>/media", methods=["POST"])
-def admin_add_media_block(slug):
+@app.route("/admin/api/corridors/<corridor_id>/sections/<slug>/media", methods=["POST"])
+def admin_add_media_block(corridor_id, slug):
     upload = request.files.get("file")
     if upload is None or not upload.filename:
         return jsonify({"error": "No file uploaded"}), 400
@@ -436,12 +594,15 @@ def admin_add_media_block(slug):
 
     with _content_lock:
         content = _load_content()
-        section = _find_section(content, slug)
+        corridor = _find_corridor(content, corridor_id)
+        if corridor is None:
+            return jsonify({"error": "Corridor not found"}), 404
+        section = _find_section(corridor, slug)
         if section is None:
             return jsonify({"error": "Section not found"}), 404
-        link = _validate_link(request.form.get("link"), content)
+        link = _validate_link(request.form.get("link"), corridor)
 
-        dest_dir = UPLOADS_DIR / slug
+        dest_dir = UPLOADS_DIR / corridor_id / slug
         dest_dir.mkdir(parents=True, exist_ok=True)
         stored_name = f"{uuid.uuid4().hex}{ext}"
         upload.save(str(dest_dir / stored_name))
@@ -449,11 +610,11 @@ def admin_add_media_block(slug):
         block = {"id": uuid.uuid4().hex, "type": block_type, "filename": stored_name, "caption": caption, "link": link}
         section["blocks"].append(block)
         _save_content(content)
-    return jsonify(_block_public_view(slug, block))
+    return jsonify(_block_public_view(corridor_id, slug, block))
 
 
-@app.route("/admin/api/sections/<slug>/text", methods=["POST"])
-def admin_add_text_block(slug):
+@app.route("/admin/api/corridors/<corridor_id>/sections/<slug>/text", methods=["POST"])
+def admin_add_text_block(corridor_id, slug):
     data = request.get_json(force=True, silent=True) or {}
     text = str(data.get("text", "")).strip()
     if not text:
@@ -462,14 +623,17 @@ def admin_add_text_block(slug):
 
     with _content_lock:
         content = _load_content()
-        section = _find_section(content, slug)
+        corridor = _find_corridor(content, corridor_id)
+        if corridor is None:
+            return jsonify({"error": "Corridor not found"}), 404
+        section = _find_section(corridor, slug)
         if section is None:
             return jsonify({"error": "Section not found"}), 404
-        link = _validate_link(data.get("link"), content)
+        link = _validate_link(data.get("link"), corridor)
         block = {"id": uuid.uuid4().hex, "type": "text", "text": text, "caption": "", "style": style, "link": link}
         section["blocks"].append(block)
         _save_content(content)
-    return jsonify(_block_public_view(slug, block))
+    return jsonify(_block_public_view(corridor_id, slug, block))
 
 
 @app.route("/admin/api/blocks/<block_id>", methods=["PUT"])
@@ -478,7 +642,7 @@ def admin_edit_block(block_id):
 
     with _content_lock:
         content = _load_content()
-        section, block = _find_block(content, block_id)
+        corridor, section, block = _find_block(content, block_id)
         if block is None:
             return jsonify({"error": "Block not found"}), 404
         if block["type"] == "text" and "text" in data:
@@ -488,33 +652,36 @@ def admin_edit_block(block_id):
         if "caption" in data:
             block["caption"] = str(data["caption"]).strip()
         if "link" in data:
-            block["link"] = _validate_link(data["link"], content)
+            block["link"] = _validate_link(data["link"], corridor)
         _save_content(content)
-    return jsonify(_block_public_view(section["slug"], block))
+    return jsonify(_block_public_view(corridor["id"], section["slug"], block))
 
 
 @app.route("/admin/api/blocks/<block_id>", methods=["DELETE"])
 def admin_delete_block(block_id):
     with _content_lock:
         content = _load_content()
-        section, block = _find_block(content, block_id)
+        corridor, section, block = _find_block(content, block_id)
         if block is None:
             return jsonify({"error": "Block not found"}), 404
         section["blocks"] = [b for b in section["blocks"] if b["id"] != block_id]
         _save_content(content)
         if block["type"] in ("image", "video"):
-            (UPLOADS_DIR / section["slug"] / block["filename"]).unlink(missing_ok=True)
+            (UPLOADS_DIR / corridor["id"] / section["slug"] / block["filename"]).unlink(missing_ok=True)
     return jsonify({"ok": True})
 
 
-@app.route("/admin/api/sections/<slug>/blocks/reorder", methods=["POST"])
-def admin_reorder_blocks(slug):
+@app.route("/admin/api/corridors/<corridor_id>/sections/<slug>/blocks/reorder", methods=["POST"])
+def admin_reorder_blocks(corridor_id, slug):
     data = request.get_json(force=True, silent=True) or {}
     order = data.get("order", [])
 
     with _content_lock:
         content = _load_content()
-        section = _find_section(content, slug)
+        corridor = _find_corridor(content, corridor_id)
+        if corridor is None:
+            return jsonify({"error": "Corridor not found"}), 404
+        section = _find_section(corridor, slug)
         if section is None:
             return jsonify({"error": "Section not found"}), 404
         current_ids = {b["id"] for b in section["blocks"]}

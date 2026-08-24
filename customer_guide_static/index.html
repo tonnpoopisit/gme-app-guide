@@ -42,6 +42,31 @@
     font-size: 18px;
     font-weight: 600;
   }
+  .corridor-switcher {
+    display: flex;
+    gap: 8px;
+    padding: 12px 20px;
+    background: var(--card-bg);
+    border-bottom: 1px solid var(--border);
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+  .corridor-switcher button {
+    padding: 9px 18px;
+    min-height: 40px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .corridor-switcher button.active {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
   .layout {
     display: flex;
     max-width: 1100px;
@@ -178,12 +203,20 @@
 </head>
 <body>
 <header><h1>GME App Guide</h1></header>
+<div class="corridor-switcher" id="corridorSwitcher"></div>
 <div class="layout">
   <nav class="sidebar" id="sidebar"></nav>
   <main id="main"><div class="empty-state">Loading&hellip;</div></main>
 </div>
 <script>
-let sections = [];
+let corridors = [];
+
+function parseHash() {
+  const raw = window.location.hash.replace("#", "");
+  const slashIndex = raw.indexOf("/");
+  if (slashIndex === -1) return { corridorId: raw || null, slug: null };
+  return { corridorId: raw.slice(0, slashIndex) || null, slug: raw.slice(slashIndex + 1) || null };
+}
 
 async function exportImagesAsLongImage(section, button) {
   const imageBlocks = section.blocks.filter((b) => b.type === "image");
@@ -233,21 +266,50 @@ async function exportImagesAsLongImage(section, button) {
   }
 }
 
-function render(activeSlug) {
+function renderCorridorSwitcher(activeCorridorId) {
+  const bar = document.getElementById("corridorSwitcher");
+  bar.innerHTML = "";
+  if (corridors.length <= 1) {
+    bar.style.display = "none";
+    return;
+  }
+  bar.style.display = "flex";
+  corridors.forEach((c) => {
+    const btn = document.createElement("button");
+    btn.textContent = c.label;
+    btn.className = c.id === activeCorridorId ? "active" : "";
+    btn.addEventListener("click", () => {
+      const firstSlug = c.sections[0] ? c.sections[0].slug : "";
+      window.location.hash = c.id + "/" + firstSlug;
+    });
+    bar.appendChild(btn);
+  });
+}
+
+function render(corridorId, activeSlug) {
+  const corridor = corridors.find((c) => c.id === corridorId) || corridors[0];
+  if (!corridor) {
+    document.getElementById("corridorSwitcher").style.display = "none";
+    document.getElementById("sidebar").innerHTML = "";
+    document.getElementById("main").innerHTML = '<div class="empty-state">No content yet.</div>';
+    return;
+  }
+  renderCorridorSwitcher(corridor.id);
+
   const sidebar = document.getElementById("sidebar");
   sidebar.innerHTML = "";
-  sections.forEach((s) => {
+  corridor.sections.forEach((s) => {
     const btn = document.createElement("button");
     btn.textContent = s.title;
     btn.className = s.slug === activeSlug ? "active" : "";
     btn.addEventListener("click", () => {
-      window.location.hash = s.slug;
+      window.location.hash = corridor.id + "/" + s.slug;
     });
     sidebar.appendChild(btn);
   });
 
   const main = document.getElementById("main");
-  const section = sections.find((s) => s.slug === activeSlug) || sections[0];
+  const section = corridor.sections.find((s) => s.slug === activeSlug) || corridor.sections[0];
   if (!section) {
     main.innerHTML = '<div class="empty-state">No topics yet.</div>';
     return;
@@ -311,9 +373,9 @@ function render(activeSlug) {
       wrap.appendChild(cap);
     }
     if (block.link) {
-      const target = sections.find((s) => s.slug === block.link);
+      const target = corridor.sections.find((s) => s.slug === block.link);
       if (target) {
-        const goToTarget = () => { window.location.hash = block.link; };
+        const goToTarget = () => { window.location.hash = corridor.id + "/" + block.link; };
         // Video already has its own click targets (play/pause/scrub), so
         // only the hint text navigates there; image/text blocks have no
         // competing click behavior, so the whole card is clickable.
@@ -338,13 +400,15 @@ function render(activeSlug) {
 async function load() {
   const resp = await fetch("/api/content");
   const data = await resp.json();
-  sections = data.sections || [];
-  const initial = window.location.hash.replace("#", "") || (sections[0] && sections[0].slug);
-  render(initial);
+  corridors = data.corridors || [];
+  const { corridorId, slug } = parseHash();
+  const initialCorridor = corridors.find((c) => c.id === corridorId) || corridors[0];
+  render(initialCorridor ? initialCorridor.id : null, slug);
 }
 
 window.addEventListener("hashchange", () => {
-  render(window.location.hash.replace("#", ""));
+  const { corridorId, slug } = parseHash();
+  render(corridorId, slug);
 });
 
 load();

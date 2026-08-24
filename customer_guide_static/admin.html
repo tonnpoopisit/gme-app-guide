@@ -54,6 +54,53 @@
     cursor: pointer;
     padding: 0;
   }
+
+  .corridor-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 20px;
+    background: var(--card-bg);
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+  .corridor-tab {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 6px 6px 6px 12px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    font-size: 13px;
+  }
+  .corridor-tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .corridor-tab .label { cursor: pointer; padding-right: 4px; }
+  .corridor-tab button {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: inherit;
+    opacity: 0.7;
+    font-size: 12px;
+    padding: 3px 5px;
+  }
+  .corridor-tab button:hover { opacity: 1; }
+  .corridor-tab button:disabled { opacity: 0.3; cursor: not-allowed; }
+  .add-corridor-form {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .add-corridor-form input, .add-corridor-form select {
+    padding: 7px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+  }
+
   .layout {
     display: flex;
     max-width: 1200px;
@@ -108,6 +155,7 @@
     display: flex;
     gap: 6px;
     margin-top: 12px;
+    flex-wrap: wrap;
   }
   .add-section input {
     flex: 1;
@@ -249,6 +297,7 @@
     border-radius: 8px;
     font-size: 13px;
     display: none;
+    max-width: 360px;
   }
   .toast.on { display: block; }
   .toast.ok { background: var(--success-bg); color: var(--success); }
@@ -311,6 +360,20 @@
     font-size: 12.5px;
     margin-bottom: 6px;
   }
+  .translate-btn {
+    font-size: 12px;
+    padding: 4px 9px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+    color: var(--accent);
+    cursor: pointer;
+    margin-bottom: 6px;
+  }
+  .translate-btn:hover { background: var(--bg); }
+  .translate-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+  .translate-row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+  .translate-row .translate-btn { margin-bottom: 0; }
 
   .lightbox {
     display: none;
@@ -353,6 +416,7 @@
     <button class="link" id="logoutBtn">Log out</button>
   </div>
 </header>
+<div class="corridor-bar" id="corridorBar"></div>
 <div class="layout">
   <div class="panel sections-panel">
     <h2>Topics</h2>
@@ -374,6 +438,9 @@
 </div>
 
 <script>
+// --------------------------------------------------------------------------
+// Lightbox
+// --------------------------------------------------------------------------
 function openLightbox(url, type) {
   const box = document.getElementById("lightboxContent");
   box.querySelectorAll("img, video").forEach((el) => el.remove());
@@ -395,14 +462,66 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeLightbox();
 });
 
-function createLinkSelect(currentLink) {
+// --------------------------------------------------------------------------
+// Translation - script detection is pure client-side (Unicode ranges), the
+// actual translate call goes through /admin/api/translate so the API key
+// never reaches the browser.
+// --------------------------------------------------------------------------
+const SCRIPT_RANGES = { th: [0x0E00, 0x0E7F], lo: [0x0E80, 0x0EFF] };
+
+function containsScript(text, lang) {
+  const range = SCRIPT_RANGES[lang];
+  if (!range) return false;
+  for (const ch of text) {
+    const code = ch.codePointAt(0);
+    if (code >= range[0] && code <= range[1]) return true;
+  }
+  return false;
+}
+
+function createTranslateButton(getCorridor, getValue, setValue) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "translate-btn";
+  btn.textContent = "Translate";
+  btn.title = "Translate this text into the current corridor's language";
+  btn.addEventListener("click", async () => {
+    const corridor = getCorridor();
+    if (!corridor) { showToast("Select a corridor first", false); return; }
+    const text = getValue().trim();
+    if (!text) return;
+    if (containsScript(text, corridor.lang)) {
+      showToast("Already looks like " + corridor.label + " - no translation needed", true);
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = "Translating...";
+    try {
+      const result = await api("/admin/api/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, target: corridor.lang }),
+      });
+      setValue(result.translatedText);
+      showToast("Translated to " + corridor.label, true);
+    } catch (e) {
+      showToast(e.message, false);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Translate";
+    }
+  });
+  return btn;
+}
+
+function createLinkSelect(currentLink, corridor) {
   const select = document.createElement("select");
   select.className = "link-select";
   const noneOpt = document.createElement("option");
   noneOpt.value = "";
   noneOpt.textContent = "No link";
   select.appendChild(noneOpt);
-  content.sections.forEach((s) => {
+  corridor.sections.forEach((s) => {
     const opt = document.createElement("option");
     opt.value = s.slug;
     opt.textContent = "Link to: " + s.title;
@@ -476,8 +595,16 @@ function createStyleToolbar(initialStyle) {
   return { element: bar, getStyle: () => ({ ...style }) };
 }
 
-let content = { sections: [] };
+// --------------------------------------------------------------------------
+// State + data loading
+// --------------------------------------------------------------------------
+let content = { corridors: [] };
+let activeCorridorId = null;
 let activeSlug = null;
+
+function getActiveCorridor() {
+  return content.corridors.find((c) => c.id === activeCorridorId) || null;
+}
 
 function showToast(msg, ok) {
   const t = document.getElementById("toast");
@@ -496,17 +623,169 @@ async function api(path, options) {
 
 async function loadContent() {
   content = await api("/admin/api/content");
-  if (!activeSlug || !content.sections.find((s) => s.slug === activeSlug)) {
-    activeSlug = content.sections[0] ? content.sections[0].slug : null;
+  if (!activeCorridorId || !content.corridors.find((c) => c.id === activeCorridorId)) {
+    activeCorridorId = content.corridors[0] ? content.corridors[0].id : null;
   }
+  const corridor = getActiveCorridor();
+  if (!corridor || !activeSlug || !corridor.sections.find((s) => s.slug === activeSlug)) {
+    activeSlug = corridor && corridor.sections[0] ? corridor.sections[0].slug : null;
+  }
+  renderCorridors();
   renderSections();
   renderContentPanel();
 }
 
+// --------------------------------------------------------------------------
+// Corridors
+// --------------------------------------------------------------------------
+function renderCorridors() {
+  const bar = document.getElementById("corridorBar");
+  bar.innerHTML = "";
+
+  content.corridors.forEach((c, i) => {
+    const tab = document.createElement("div");
+    tab.className = "corridor-tab" + (c.id === activeCorridorId ? " active" : "");
+
+    const label = document.createElement("span");
+    label.className = "label";
+    label.textContent = c.label + " (" + (c.lang === "th" ? "Thai" : "Lao") + ")";
+    label.addEventListener("click", () => {
+      activeCorridorId = c.id;
+      activeSlug = null;
+      renderCorridors();
+      renderSections();
+      renderContentPanel();
+    });
+    tab.appendChild(label);
+
+    const left = document.createElement("button");
+    left.textContent = "←";
+    left.title = "Move left";
+    left.disabled = i === 0;
+    left.addEventListener("click", () => moveCorridor(i, -1));
+    tab.appendChild(left);
+
+    const right = document.createElement("button");
+    right.textContent = "→";
+    right.title = "Move right";
+    right.disabled = i === content.corridors.length - 1;
+    right.addEventListener("click", () => moveCorridor(i, 1));
+    tab.appendChild(right);
+
+    const rename = document.createElement("button");
+    rename.textContent = "✎";
+    rename.title = "Rename";
+    rename.addEventListener("click", () => renameCorridor(c));
+    tab.appendChild(rename);
+
+    const del = document.createElement("button");
+    del.textContent = "✕";
+    del.title = "Delete corridor";
+    del.disabled = content.corridors.length <= 1;
+    del.addEventListener("click", () => deleteCorridor(c));
+    tab.appendChild(del);
+
+    bar.appendChild(tab);
+  });
+
+  const addForm = document.createElement("form");
+  addForm.className = "add-corridor-form";
+  const labelInput = document.createElement("input");
+  labelInput.type = "text";
+  labelInput.placeholder = "New corridor name";
+  const langSelect = document.createElement("select");
+  [["th", "Thai"], ["lo", "Lao"]].forEach(([value, label]) => {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = label;
+    langSelect.appendChild(opt);
+  });
+  const submitBtn = document.createElement("button");
+  submitBtn.type = "submit";
+  submitBtn.className = "link";
+  submitBtn.style.color = "var(--accent)";
+  submitBtn.style.fontWeight = "600";
+  submitBtn.textContent = "Add corridor";
+  addForm.append(labelInput, langSelect, submitBtn);
+  addForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const label = labelInput.value.trim();
+    if (!label) return;
+    try {
+      const corridor = await api("/admin/api/corridors", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label, lang: langSelect.value }),
+      });
+      activeCorridorId = corridor.id;
+      activeSlug = null;
+      await loadContent();
+      showToast("Corridor added", true);
+    } catch (err) { showToast(err.message, false); }
+  });
+  bar.appendChild(addForm);
+}
+
+async function applyCorridorOrder(order) {
+  try {
+    await api("/admin/api/corridors/reorder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ order }),
+    });
+    await loadContent();
+  } catch (e) { showToast(e.message, false); }
+}
+
+async function moveCorridor(index, delta) {
+  const order = content.corridors.map((c) => c.id);
+  const target = index + delta;
+  if (target < 0 || target >= order.length) return;
+  [order[index], order[target]] = [order[target], order[index]];
+  await applyCorridorOrder(order);
+}
+
+async function renameCorridor(corridor) {
+  const label = prompt("Rename corridor", corridor.label);
+  if (label === null || !label.trim()) return;
+  try {
+    const updated = await api("/admin/api/corridors/" + corridor.id, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label: label.trim() }),
+    });
+    if (activeCorridorId === corridor.id) activeCorridorId = updated.id;
+    await loadContent();
+    showToast("Renamed", true);
+  } catch (e) { showToast(e.message, false); }
+}
+
+async function deleteCorridor(corridor) {
+  if (content.corridors.length <= 1) return;
+  if (!confirm('Delete corridor "' + corridor.label + '" and ALL its topics and content? This cannot be undone.')) return;
+  try {
+    await api("/admin/api/corridors/" + corridor.id, { method: "DELETE" });
+    if (activeCorridorId === corridor.id) activeCorridorId = null;
+    await loadContent();
+    showToast("Deleted", true);
+  } catch (e) { showToast(e.message, false); }
+}
+
+// --------------------------------------------------------------------------
+// Sections (topics)
+// --------------------------------------------------------------------------
+let draggedSectionIndex = null;
+
 function renderSections() {
   const list = document.getElementById("sectionList");
   list.innerHTML = "";
-  content.sections.forEach((s, i) => {
+  const corridor = getActiveCorridor();
+  if (!corridor) {
+    list.innerHTML = '<div class="empty-state">Add a corridor first.</div>';
+    return;
+  }
+
+  corridor.sections.forEach((s, i) => {
     const row = document.createElement("div");
     row.className = "section-row" + (s.slug === activeSlug ? " active" : "");
     row.draggable = true;
@@ -555,7 +834,7 @@ function renderSections() {
     const down = document.createElement("button");
     down.textContent = "↓";
     down.title = "Move down";
-    down.disabled = i === content.sections.length - 1;
+    down.disabled = i === corridor.sections.length - 1;
     down.addEventListener("click", () => moveSection(i, 1));
     row.appendChild(down);
 
@@ -576,8 +855,9 @@ function renderSections() {
 }
 
 async function applySectionOrder(order) {
+  const corridor = getActiveCorridor();
   try {
-    await api("/admin/api/sections/reorder", {
+    await api("/admin/api/corridors/" + corridor.id + "/sections/reorder", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ order }),
@@ -587,27 +867,28 @@ async function applySectionOrder(order) {
 }
 
 async function moveSection(index, delta) {
-  const order = content.sections.map((s) => s.slug);
+  const corridor = getActiveCorridor();
+  const order = corridor.sections.map((s) => s.slug);
   const target = index + delta;
   if (target < 0 || target >= order.length) return;
   [order[index], order[target]] = [order[target], order[index]];
   await applySectionOrder(order);
 }
 
-let draggedSectionIndex = null;
-
 function reorderSectionsByDrag(fromIndex, toIndex) {
-  const order = content.sections.map((s) => s.slug);
+  const corridor = getActiveCorridor();
+  const order = corridor.sections.map((s) => s.slug);
   const [moved] = order.splice(fromIndex, 1);
   order.splice(toIndex, 0, moved);
   applySectionOrder(order);
 }
 
 async function renameSection(section) {
+  const corridor = getActiveCorridor();
   const title = prompt("Rename topic", section.title);
   if (title === null || !title.trim()) return;
   try {
-    const updated = await api("/admin/api/sections/" + section.slug, {
+    const updated = await api("/admin/api/corridors/" + corridor.id + "/sections/" + section.slug, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title: title.trim() }),
@@ -619,9 +900,10 @@ async function renameSection(section) {
 }
 
 async function deleteSection(section) {
+  const corridor = getActiveCorridor();
   if (!confirm('Delete topic "' + section.title + '" and all its content? This cannot be undone.')) return;
   try {
-    await api("/admin/api/sections/" + section.slug, { method: "DELETE" });
+    await api("/admin/api/corridors/" + corridor.id + "/sections/" + section.slug, { method: "DELETE" });
     if (activeSlug === section.slug) activeSlug = null;
     await loadContent();
     showToast("Deleted", true);
@@ -630,11 +912,13 @@ async function deleteSection(section) {
 
 document.getElementById("addSectionForm").addEventListener("submit", async (e) => {
   e.preventDefault();
+  const corridor = getActiveCorridor();
+  if (!corridor) { showToast("Add a corridor first", false); return; }
   const input = document.getElementById("newSectionTitle");
   const title = input.value.trim();
   if (!title) return;
   try {
-    const section = await api("/admin/api/sections", {
+    const section = await api("/admin/api/corridors/" + corridor.id + "/sections", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title }),
@@ -646,6 +930,23 @@ document.getElementById("addSectionForm").addEventListener("submit", async (e) =
   } catch (e) { showToast(e.message, false); }
 });
 
+// Translate button for the new-topic title - this form is static HTML (not
+// rebuilt per corridor switch), so it looks up the active corridor live at
+// click time via getActiveCorridor rather than capturing a fixed one.
+const newSectionTranslateBtn = createTranslateButton(
+  getActiveCorridor,
+  () => document.getElementById("newSectionTitle").value,
+  (v) => { document.getElementById("newSectionTitle").value = v; }
+);
+document.getElementById("addSectionForm").insertBefore(
+  newSectionTranslateBtn,
+  document.getElementById("addSectionForm").querySelector('button[type="submit"]')
+);
+
+// --------------------------------------------------------------------------
+// Export images as one long image (unchanged by corridors - operates on
+// already-resolved block.url values)
+// --------------------------------------------------------------------------
 async function exportImagesAsLongImage(section, button) {
   const imageBlocks = section.blocks.filter((b) => b.type === "image");
   if (imageBlocks.length === 0) return;
@@ -662,9 +963,6 @@ async function exportImagesAsLongImage(section, button) {
       img.src = block.url;
     })));
 
-    // Stitching to the widest image (capped at 1080px) keeps every photo
-    // full quality-legible while avoiding a multi-thousand-pixel-wide
-    // canvas if one upload happens to be unusually large.
     const targetWidth = Math.min(1080, Math.max(...images.map((img) => img.naturalWidth)));
     const scaledHeights = images.map((img) => Math.round(img.naturalHeight * (targetWidth / img.naturalWidth)));
     const totalHeight = scaledHeights.reduce((sum, h) => sum + h, 0);
@@ -701,9 +999,17 @@ function _slugifyForFilename(title) {
   return (title || "topic").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "topic";
 }
 
+// --------------------------------------------------------------------------
+// Content panel (blocks within the active topic)
+// --------------------------------------------------------------------------
 function renderContentPanel() {
   const panel = document.getElementById("contentPanel");
-  const section = content.sections.find((s) => s.slug === activeSlug);
+  const corridor = getActiveCorridor();
+  if (!corridor) {
+    panel.innerHTML = '<div class="empty-state">Add a corridor to get started.</div>';
+    return;
+  }
+  const section = corridor.sections.find((s) => s.slug === activeSlug);
   if (!section) {
     panel.innerHTML = '<div class="empty-state">Select or add a topic to manage its content.</div>';
     return;
@@ -735,13 +1041,13 @@ function renderContentPanel() {
   }
 
   section.blocks.forEach((block, i) => {
-    panel.appendChild(renderBlockCard(section, block, i));
+    panel.appendChild(renderBlockCard(corridor, section, block, i));
   });
 
-  panel.appendChild(renderAddForms(section));
+  panel.appendChild(renderAddForms(corridor, section));
 }
 
-function renderBlockCard(section, block, index) {
+function renderBlockCard(corridor, section, block, index) {
   const card = document.createElement("div");
   card.className = "block-card";
 
@@ -772,7 +1078,7 @@ function renderBlockCard(section, block, index) {
     e.preventDefault();
     card.classList.remove("drag-over");
     if (draggedBlockIndex === null || draggedBlockIndex === index) return;
-    reorderBlocksByDrag(section, draggedBlockIndex, index);
+    reorderBlocksByDrag(corridor, section, draggedBlockIndex, index);
     draggedBlockIndex = null;
   });
 
@@ -818,7 +1124,14 @@ function renderBlockCard(section, block, index) {
     textarea.value = block.text;
     fields.appendChild(textarea);
 
-    const linkSelect = createLinkSelect(block.link);
+    const translateBtn = createTranslateButton(
+      () => corridor,
+      () => textarea.value,
+      (v) => { textarea.value = v; }
+    );
+    fields.insertBefore(translateBtn, textarea);
+
+    const linkSelect = createLinkSelect(block.link, corridor);
     fields.appendChild(linkSelect);
 
     const actions = document.createElement("div");
@@ -831,16 +1144,24 @@ function renderBlockCard(section, block, index) {
       link: linkSelect.value || null,
     }));
     actions.appendChild(saveBtn);
-    appendMoveDelete(actions, section, index, block);
+    appendMoveDelete(actions, corridor, section, index, block);
     fields.appendChild(actions);
   } else {
+    const captionRow = document.createElement("div");
+    captionRow.className = "translate-row";
     const captionInput = document.createElement("input");
     captionInput.type = "text";
     captionInput.placeholder = "Caption (optional)";
     captionInput.value = block.caption || "";
-    fields.appendChild(captionInput);
+    const captionTranslateBtn = createTranslateButton(
+      () => corridor,
+      () => captionInput.value,
+      (v) => { captionInput.value = v; }
+    );
+    captionRow.append(captionInput, captionTranslateBtn);
+    fields.appendChild(captionRow);
 
-    const linkSelect = createLinkSelect(block.link);
+    const linkSelect = createLinkSelect(block.link, corridor);
     fields.appendChild(linkSelect);
 
     const actions = document.createElement("div");
@@ -852,7 +1173,7 @@ function renderBlockCard(section, block, index) {
       link: linkSelect.value || null,
     }));
     actions.appendChild(saveBtn);
-    appendMoveDelete(actions, section, index, block);
+    appendMoveDelete(actions, corridor, section, index, block);
     fields.appendChild(actions);
   }
 
@@ -860,17 +1181,17 @@ function renderBlockCard(section, block, index) {
   return card;
 }
 
-function appendMoveDelete(actions, section, index, block) {
+function appendMoveDelete(actions, corridor, section, index, block) {
   const up = document.createElement("button");
   up.textContent = "↑";
   up.disabled = index === 0;
-  up.addEventListener("click", () => moveBlock(section, index, -1));
+  up.addEventListener("click", () => moveBlock(corridor, section, index, -1));
   actions.appendChild(up);
 
   const down = document.createElement("button");
   down.textContent = "↓";
   down.disabled = index === section.blocks.length - 1;
-  down.addEventListener("click", () => moveBlock(section, index, 1));
+  down.addEventListener("click", () => moveBlock(corridor, section, index, 1));
   actions.appendChild(down);
 
   const del = document.createElement("button");
@@ -880,9 +1201,9 @@ function appendMoveDelete(actions, section, index, block) {
   actions.appendChild(del);
 }
 
-async function applyBlockOrder(section, order) {
+async function applyBlockOrder(corridor, section, order) {
   try {
-    await api("/admin/api/sections/" + section.slug + "/blocks/reorder", {
+    await api("/admin/api/corridors/" + corridor.id + "/sections/" + section.slug + "/blocks/reorder", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ order }),
@@ -891,21 +1212,21 @@ async function applyBlockOrder(section, order) {
   } catch (e) { showToast(e.message, false); }
 }
 
-async function moveBlock(section, index, delta) {
+async function moveBlock(corridor, section, index, delta) {
   const order = section.blocks.map((b) => b.id);
   const target = index + delta;
   if (target < 0 || target >= order.length) return;
   [order[index], order[target]] = [order[target], order[index]];
-  await applyBlockOrder(section, order);
+  await applyBlockOrder(corridor, section, order);
 }
 
 let draggedBlockIndex = null;
 
-function reorderBlocksByDrag(section, fromIndex, toIndex) {
+function reorderBlocksByDrag(corridor, section, fromIndex, toIndex) {
   const order = section.blocks.map((b) => b.id);
   const [moved] = order.splice(fromIndex, 1);
   order.splice(toIndex, 0, moved);
-  applyBlockOrder(section, order);
+  applyBlockOrder(corridor, section, order);
 }
 
 async function updateBlock(blockId, payload) {
@@ -929,7 +1250,7 @@ async function deleteBlock(blockId) {
   } catch (e) { showToast(e.message, false); }
 }
 
-function renderAddForms(section) {
+function renderAddForms(corridor, section) {
   const wrap = document.createElement("div");
   wrap.className = "add-block-forms";
 
@@ -937,15 +1258,30 @@ function renderAddForms(section) {
   mediaForm.innerHTML = `
     <h3>Add images or videos</h3>
     <input type="file" name="file" accept="image/*,video/*" multiple required>
-    <input type="text" name="caption" placeholder="Caption (optional, applied to all selected files)">
-    <button type="submit">Upload</button>
   `;
-  const mediaLinkSelect = createLinkSelect(null);
-  mediaForm.insertBefore(mediaLinkSelect, mediaForm.querySelector('button[type="submit"]'));
+  const mediaCaptionRow = document.createElement("div");
+  mediaCaptionRow.className = "translate-row";
+  const mediaCaptionInput = document.createElement("input");
+  mediaCaptionInput.type = "text";
+  mediaCaptionInput.name = "caption";
+  mediaCaptionInput.placeholder = "Caption (optional, applied to all selected files)";
+  const mediaCaptionTranslateBtn = createTranslateButton(
+    () => corridor,
+    () => mediaCaptionInput.value,
+    (v) => { mediaCaptionInput.value = v; }
+  );
+  mediaCaptionRow.append(mediaCaptionInput, mediaCaptionTranslateBtn);
+  mediaForm.appendChild(mediaCaptionRow);
+  const mediaLinkSelect = createLinkSelect(null, corridor);
+  mediaForm.appendChild(mediaLinkSelect);
+  const mediaSubmitBtn = document.createElement("button");
+  mediaSubmitBtn.type = "submit";
+  mediaSubmitBtn.textContent = "Upload";
+  mediaForm.appendChild(mediaSubmitBtn);
+
   mediaForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     const fileInput = mediaForm.querySelector('input[name="file"]');
-    const captionInput = mediaForm.querySelector('input[name="caption"]');
     const files = Array.from(fileInput.files);
     if (files.length === 0) return;
     const submitBtn = mediaForm.querySelector('button[type="submit"]');
@@ -956,10 +1292,10 @@ function renderAddForms(section) {
       submitBtn.textContent = `Uploading ${uploaded + failed + 1}/${files.length}...`;
       const formData = new FormData();
       formData.append("file", file);
-      formData.append("caption", captionInput.value);
+      formData.append("caption", mediaCaptionInput.value);
       formData.append("link", mediaLinkSelect.value);
       try {
-        await api("/admin/api/sections/" + section.slug + "/media", { method: "POST", body: formData });
+        await api("/admin/api/corridors/" + corridor.id + "/sections/" + section.slug + "/media", { method: "POST", body: formData });
         uploaded++;
       } catch (err) {
         failed++;
@@ -977,21 +1313,32 @@ function renderAddForms(section) {
   wrap.appendChild(mediaForm);
 
   const textForm = document.createElement("form");
-  textForm.innerHTML = `
-    <h3>Add text block</h3>
-    <textarea name="text" placeholder="Instructional text" required></textarea>
-    <button type="submit">Add text</button>
-  `;
+  textForm.innerHTML = `<h3>Add text block</h3>`;
+  const textarea = document.createElement("textarea");
+  textarea.name = "text";
+  textarea.placeholder = "Instructional text";
+  textarea.required = true;
+  const textTranslateBtn = createTranslateButton(
+    () => corridor,
+    () => textarea.value,
+    (v) => { textarea.value = v; }
+  );
+  textForm.appendChild(textTranslateBtn);
+  textForm.appendChild(textarea);
   const textToolbar = createStyleToolbar(null);
-  textForm.insertBefore(textToolbar.element, textForm.querySelector("textarea"));
-  const textLinkSelect = createLinkSelect(null);
-  textForm.insertBefore(textLinkSelect, textForm.querySelector('button[type="submit"]'));
+  textForm.appendChild(textToolbar.element);
+  const textLinkSelect = createLinkSelect(null, corridor);
+  textForm.appendChild(textLinkSelect);
+  const textSubmitBtn = document.createElement("button");
+  textSubmitBtn.type = "submit";
+  textSubmitBtn.textContent = "Add text";
+  textForm.appendChild(textSubmitBtn);
+
   textForm.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const textarea = textForm.querySelector('textarea[name="text"]');
     if (!textarea.value.trim()) return;
     try {
-      await api("/admin/api/sections/" + section.slug + "/text", {
+      await api("/admin/api/corridors/" + corridor.id + "/sections/" + section.slug + "/text", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1002,7 +1349,7 @@ function renderAddForms(section) {
       });
       showToast("Added", true);
       await loadContent();
-    } catch (e) { showToast(e.message, false); }
+    } catch (err) { showToast(err.message, false); }
   });
   wrap.appendChild(textForm);
 
