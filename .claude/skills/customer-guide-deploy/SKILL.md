@@ -38,6 +38,8 @@ Text/caption/embed-URL/style/link fields on an *existing* block save themselves:
 
 The admin header's "View public site →" link deep-links to whatever corridor/topic is currently selected in admin (`#<corridorId>/<slug>`, kept in sync by `updatePublicLink()`) rather than always opening the site root - makes it fast to cross-check what a specific edit actually looks like live.
 
+**Gotcha already hit once**: the style toolbar's preset buttons (Bold/Italic/align/**Default color**) are `<button>`s that mutate `style` on `click`, not `input`/`change` - the auto-save listeners on `toolbar.element` must include `click` too, or clicking those buttons updates what's shown in admin but never actually saves it. Missing this exact listener is what caused a real bug: an admin set an explicit near-black text color, later clicked "Default color" to undo it, and the old color stayed live on the public site (invisible against the dark theme) because the click was never persisted. Custom colors also aren't theme-aware - a color picked while looking at light mode can be unreadable in dark mode or vice versa, so prefer "Default color" over a custom pick unless you've checked both.
+
 ## Enabling translation
 
 Not required to deploy/run the app - without `GOOGLE_TRANSLATE_API_KEY` set, the Translate button just shows a clear "not configured" error and everything else works normally. To enable it:

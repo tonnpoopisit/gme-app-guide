@@ -1348,6 +1348,13 @@ function renderBlockCard(corridor, section, block, index) {
     textarea.addEventListener("blur", saver.triggerNow);
     toolbar.element.addEventListener("input", saver.trigger);
     toolbar.element.addEventListener("change", saver.trigger);
+    // Bold/Italic/align/"Default color" are <button>s that mutate the
+    // toolbar's internal style state on click, not input/change - without
+    // this, clicking them updates what's shown on screen but never
+    // actually saves it (exactly what happened: "Default color" looked
+    // applied in admin but the old explicit color was still live on the
+    // public site, since nothing had triggered a save).
+    toolbar.element.addEventListener("click", saver.trigger);
     linkSelect.addEventListener("change", saver.trigger);
 
     const actions = document.createElement("div");
