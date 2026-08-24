@@ -233,7 +233,24 @@ def _load_content() -> dict:
 
 
 def _save_content(content: dict):
-    CONTENT_PATH.write_text(json.dumps(content, indent=2, ensure_ascii=False), encoding="utf-8")
+    """Retries on OSError: on Windows, something else briefly holding the
+    file open (antivirus scan, a backup/zip tool reading it, OneDrive
+    indexing) can make a plain write fail with EINVAL for a moment - seen
+    live as a 500 on /blocks/reorder while a content.json backup was being
+    zipped concurrently. Those locks normally clear within milliseconds, so
+    a few short retries are enough; if it's still failing after that it's a
+    real problem and should surface as an error rather than retry forever."""
+    payload = json.dumps(content, indent=2, ensure_ascii=False)
+    delays = (0, 0.1, 0.3, 0.6)
+    for i, delay in enumerate(delays):
+        if delay:
+            time.sleep(delay)
+        try:
+            CONTENT_PATH.write_text(payload, encoding="utf-8")
+            return
+        except OSError:
+            if i == len(delays) - 1:
+                raise
 
 
 def _slugify(title: str) -> str:

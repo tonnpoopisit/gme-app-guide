@@ -30,6 +30,14 @@ Array order *is* display order at every level (corridors, sections, blocks) - no
 
 `window.confirm()`/`window.prompt()` looked broken (delete/rename buttons silently did nothing) because Chrome lets a page's dialogs get suppressed after a few fire in a row ("Prevent this page from creating additional dialogs"), and this app's admin panel triggers enough of them in normal use to hit that. Both were replaced with custom in-page modals - `showConfirm(message)` / `showPrompt(message, defaultValue)` in `admin.html`, returning Promises. **Any new destructive action or rename-style input must use these, not the native `confirm`/`prompt`**, or the same silent-failure bug comes back.
 
+## Editing an existing block auto-saves - no Save button
+
+Text/caption/embed-URL/style/link fields on an *existing* block save themselves: typing debounces to a save ~900ms after the last keystroke, and losing focus (blur) flushes immediately so nothing is left pending if the admin clicks away. Each block card shows an inline status (`Saving…` / `Saved` / `Not saved: <error>` on failure) instead of a Save button - see `makeDebouncedSave`/`autoSaveBlock` in `admin.html`. Deliberately does **not** call `loadContent()`/re-render on save (that would steal focus out of the field being typed in) - it PUTs the change and mutates the in-memory `block` object in place instead. The "Add ..." forms (creating a *new* block/topic/corridor) still use an explicit submit button - auto-save only applies to editing something that already exists.
+
+`_save_content()` retries a few times on `OSError` before giving up - seen live as a real 500 on a block reorder while a content.json backup zip was being built concurrently (Windows transiently blocks a write while something else - antivirus, a backup tool - has the file open; usually clears within milliseconds). Keep this in mind if scripting anything that reads `customer_guide_content.json` directly (e.g. the data-zip step) while the server might be live - it's now resilient to a stray collision, but avoid making it a *frequent* one.
+
+The admin header's "View public site →" link deep-links to whatever corridor/topic is currently selected in admin (`#<corridorId>/<slug>`, kept in sync by `updatePublicLink()`) rather than always opening the site root - makes it fast to cross-check what a specific edit actually looks like live.
+
 ## Enabling translation
 
 Not required to deploy/run the app - without `GOOGLE_TRANSLATE_API_KEY` set, the Translate button just shows a clear "not configured" error and everything else works normally. To enable it:

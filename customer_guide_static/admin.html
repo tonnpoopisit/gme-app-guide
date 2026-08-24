@@ -250,6 +250,12 @@
   }
   .block-card textarea { min-height: 60px; resize: vertical; }
   .block-card .actions { display: flex; gap: 8px; align-items: center; }
+  .save-status {
+    font-size: 11.5px;
+    color: var(--text-muted);
+    min-width: 0;
+  }
+  .save-status.err { color: var(--error); }
   .block-card .actions button {
     font-size: 12px;
     padding: 4px 9px;
@@ -473,7 +479,7 @@
 <header>
   <h1>GME App Guide - Admin</h1>
   <div style="display:flex; align-items:center; gap:16px;">
-    <a href="/" target="_blank">View public site &rarr;</a>
+    <a href="/" target="_blank" id="viewPublicLink">View public site &rarr;</a>
     <button class="link" id="logoutBtn">Log out</button>
   </div>
 </header>
@@ -804,7 +810,7 @@ function renderCorridors() {
     label.textContent = c.label + " (" + (c.lang === "th" ? "Thai" : "Lao") + ")";
     label.addEventListener("click", () => {
       activeCorridorId = c.id;
-      activeSlug = null;
+      activeSlug = c.sections[0] ? c.sections[0].slug : null;
       renderCorridors();
       renderSections();
       renderContentPanel();
@@ -1176,7 +1182,14 @@ function _slugifyForFilename(title) {
 // --------------------------------------------------------------------------
 // Content panel (blocks within the active topic)
 // --------------------------------------------------------------------------
+function updatePublicLink() {
+  const link = document.getElementById("viewPublicLink");
+  if (!link) return;
+  link.href = (activeCorridorId && activeSlug) ? "/#" + activeCorridorId + "/" + activeSlug : "/";
+}
+
 function renderContentPanel() {
+  updatePublicLink();
   const panel = document.getElementById("contentPanel");
   const corridor = getActiveCorridor();
   if (!corridor) {
@@ -1317,23 +1330,29 @@ function renderBlockCard(corridor, section, block, index) {
     const translateBtn = createTranslateButton(
       () => corridor,
       () => textarea.value,
-      (v) => { textarea.value = v; }
+      (v) => { textarea.value = v; textarea.dispatchEvent(new Event("input", { bubbles: true })); }
     );
     fields.insertBefore(translateBtn, textarea);
 
     const linkSelect = createLinkSelect(block.link, corridor);
     fields.appendChild(linkSelect);
 
-    const actions = document.createElement("div");
-    actions.className = "actions";
-    const saveBtn = document.createElement("button");
-    saveBtn.textContent = "Save";
-    saveBtn.addEventListener("click", () => updateBlock(block.id, {
+    const statusEl = document.createElement("span");
+    statusEl.className = "save-status";
+    const saver = makeDebouncedSave(() => autoSaveBlock(block, {
       text: textarea.value,
       style: toolbar.getStyle(),
       link: linkSelect.value || null,
-    }));
-    actions.appendChild(saveBtn);
+    }, statusEl), 900);
+    textarea.addEventListener("input", saver.trigger);
+    textarea.addEventListener("blur", saver.triggerNow);
+    toolbar.element.addEventListener("input", saver.trigger);
+    toolbar.element.addEventListener("change", saver.trigger);
+    linkSelect.addEventListener("change", saver.trigger);
+
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    actions.appendChild(statusEl);
     appendMoveDelete(actions, corridor, section, index, block);
     fields.appendChild(actions);
   } else if (block.type === "embed") {
@@ -1352,16 +1371,22 @@ function renderBlockCard(corridor, section, block, index) {
     const linkSelect = createLinkSelect(block.link, corridor);
     fields.appendChild(linkSelect);
 
-    const actions = document.createElement("div");
-    actions.className = "actions";
-    const saveBtn = document.createElement("button");
-    saveBtn.textContent = "Save";
-    saveBtn.addEventListener("click", () => updateBlock(block.id, {
+    const statusEl = document.createElement("span");
+    statusEl.className = "save-status";
+    const saver = makeDebouncedSave(() => autoSaveBlock(block, {
       embedUrl: urlInput.value.trim(),
       caption: captionInput.value,
       link: linkSelect.value || null,
-    }));
-    actions.appendChild(saveBtn);
+    }, statusEl), 900);
+    urlInput.addEventListener("input", saver.trigger);
+    urlInput.addEventListener("blur", saver.triggerNow);
+    captionInput.addEventListener("input", saver.trigger);
+    captionInput.addEventListener("blur", saver.triggerNow);
+    linkSelect.addEventListener("change", saver.trigger);
+
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    actions.appendChild(statusEl);
     appendMoveDelete(actions, corridor, section, index, block);
     fields.appendChild(actions);
   } else {
@@ -1374,7 +1399,7 @@ function renderBlockCard(corridor, section, block, index) {
     const captionTranslateBtn = createTranslateButton(
       () => corridor,
       () => captionInput.value,
-      (v) => { captionInput.value = v; }
+      (v) => { captionInput.value = v; captionInput.dispatchEvent(new Event("input", { bubbles: true })); }
     );
     captionRow.append(captionInput, captionTranslateBtn);
     fields.appendChild(captionRow);
@@ -1382,15 +1407,19 @@ function renderBlockCard(corridor, section, block, index) {
     const linkSelect = createLinkSelect(block.link, corridor);
     fields.appendChild(linkSelect);
 
-    const actions = document.createElement("div");
-    actions.className = "actions";
-    const saveBtn = document.createElement("button");
-    saveBtn.textContent = "Save";
-    saveBtn.addEventListener("click", () => updateBlock(block.id, {
+    const statusEl = document.createElement("span");
+    statusEl.className = "save-status";
+    const saver = makeDebouncedSave(() => autoSaveBlock(block, {
       caption: captionInput.value,
       link: linkSelect.value || null,
-    }));
-    actions.appendChild(saveBtn);
+    }, statusEl), 900);
+    captionInput.addEventListener("input", saver.trigger);
+    captionInput.addEventListener("blur", saver.triggerNow);
+    linkSelect.addEventListener("change", saver.trigger);
+
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    actions.appendChild(statusEl);
     appendMoveDelete(actions, corridor, section, index, block);
     fields.appendChild(actions);
   }
@@ -1447,16 +1476,40 @@ function reorderBlocksByDrag(corridor, section, fromIndex, toIndex) {
   applyBlockOrder(corridor, section, order);
 }
 
-async function updateBlock(blockId, payload) {
+// Debounces rapid field changes (typing, dragging a color picker) into one
+// save call after `delay` ms of quiet; `triggerNow` flushes immediately
+// (used on blur, so a save is never left pending if the admin clicks away
+// before the debounce timer would have fired).
+function makeDebouncedSave(saveFn, delay) {
+  let timer = null;
+  return {
+    trigger() { clearTimeout(timer); timer = setTimeout(saveFn, delay); },
+    triggerNow() { clearTimeout(timer); saveFn(); },
+  };
+}
+
+// Auto-save for editing an existing block - deliberately does NOT call
+// loadContent()/re-render, since replacing the DOM mid-edit would steal
+// focus/cursor position out of whatever field the admin is still typing
+// in. Instead it PUTs the change and mutates `block` in place (the same
+// object instance already referenced by the in-memory `content` tree), so
+// state stays correct for later reads (e.g. reordering) without a refresh.
+async function autoSaveBlock(block, payload, statusEl) {
+  statusEl.textContent = "Saving…";
+  statusEl.classList.remove("err");
   try {
-    await api("/admin/api/blocks/" + blockId, {
+    const updated = await api("/admin/api/blocks/" + block.id, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    showToast("Saved", true);
-    await loadContent();
-  } catch (e) { showToast(e.message, false); }
+    Object.assign(block, updated);
+    statusEl.textContent = "Saved";
+    setTimeout(() => { if (statusEl.textContent === "Saved") statusEl.textContent = ""; }, 1500);
+  } catch (e) {
+    statusEl.textContent = "Not saved: " + e.message;
+    statusEl.classList.add("err");
+  }
 }
 
 async function deleteBlock(blockId) {
