@@ -1127,34 +1127,106 @@ document.getElementById("addSectionForm").insertBefore(
 // Export images as one long image (unchanged by corridors - operates on
 // already-resolved block.url values)
 // --------------------------------------------------------------------------
+// Export layout constants - font sizes are roughly 2x the on-page px
+// values (13/15/19/24) since this renders into a wide (up to 1080px)
+// standalone image meant to be read at a glance, not a responsive page.
+const EXPORT_FONT_PX = { small: 24, normal: 28, large: 36, xlarge: 46 };
+const EXPORT_FONT_FAMILY = '-apple-system, "Segoe UI", Roboto, Arial, sans-serif';
+
+// Wraps character-by-character rather than at word boundaries. Most of
+// this app's text is Thai/Lao, which don't use spaces between words the
+// way English does - word-based wrapping would just never break most
+// Thai sentences and overflow the canvas. Character wrapping works
+// correctly for every script, at the minor cost of occasionally breaking
+// mid-word in English text.
+function wrapCanvasText(ctx, text, maxWidth) {
+  const paragraphs = String(text).split("\n");
+  const lines = [];
+  paragraphs.forEach((para) => {
+    if (para === "") { lines.push(""); return; }
+    let current = "";
+    for (const ch of para) {
+      const test = current + ch;
+      if (current && ctx.measureText(test).width > maxWidth) {
+        lines.push(current);
+        current = ch;
+      } else {
+        current = test;
+      }
+    }
+    if (current) lines.push(current);
+  });
+  return lines;
+}
+
 async function exportImagesAsLongImage(section, button) {
-  const imageBlocks = section.blocks.filter((b) => b.type === "image");
-  if (imageBlocks.length === 0) return;
+  const exportable = section.blocks.filter((b) => b.type === "image" || b.type === "text");
+  if (exportable.length === 0) return;
 
   const originalLabel = button.textContent;
   button.disabled = true;
   button.textContent = "Preparing...";
 
   try {
-    const images = await Promise.all(imageBlocks.map((block) => new Promise((resolve, reject) => {
+    const loadedImages = new Map();
+    await Promise.all(exportable.filter((b) => b.type === "image").map((block) => new Promise((resolve, reject) => {
       const img = new Image();
-      img.onload = () => resolve(img);
+      img.onload = () => { loadedImages.set(block, img); resolve(); };
       img.onerror = () => reject(new Error("Couldn't load " + block.url));
       img.src = block.url;
     })));
 
-    const targetWidth = Math.min(1080, Math.max(...images.map((img) => img.naturalWidth)));
-    const scaledHeights = images.map((img) => Math.round(img.naturalHeight * (targetWidth / img.naturalWidth)));
-    const totalHeight = scaledHeights.reduce((sum, h) => sum + h, 0);
+    const imgWidths = Array.from(loadedImages.values()).map((img) => img.naturalWidth);
+    const targetWidth = imgWidths.length > 0 ? Math.min(1080, Math.max(...imgWidths)) : 1080;
+    const textPadding = 28;
+    const textMaxWidth = targetWidth - textPadding * 2;
+    const blockGap = 20;
+
+    const measureCtx = document.createElement("canvas").getContext("2d");
+    const layout = exportable.map((block) => {
+      if (block.type === "image") {
+        const img = loadedImages.get(block);
+        return { kind: "image", img, height: Math.round(img.naturalHeight * (targetWidth / img.naturalWidth)) };
+      }
+      const style = block.style || {};
+      const fontPx = EXPORT_FONT_PX[style.fontSize] || EXPORT_FONT_PX.normal;
+      const weight = style.bold ? "700" : "400";
+      const fontStyle = style.italic ? "italic" : "normal";
+      measureCtx.font = `${fontStyle} ${weight} ${fontPx}px ${EXPORT_FONT_FAMILY}`;
+      const lines = wrapCanvasText(measureCtx, block.text || "", textMaxWidth);
+      const lineHeight = Math.round(fontPx * 1.4);
+      return {
+        kind: "text", lines, fontPx, weight, fontStyle, lineHeight,
+        align: style.align || "left",
+        height: lines.length * lineHeight + textPadding * 2,
+      };
+    });
+
+    const totalHeight = layout.reduce((sum, item, i) => sum + item.height + (i > 0 ? blockGap : 0), 0);
 
     const canvas = document.createElement("canvas");
     canvas.width = targetWidth;
     canvas.height = totalHeight;
     const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, targetWidth, totalHeight);
+
     let y = 0;
-    images.forEach((img, i) => {
-      ctx.drawImage(img, 0, y, targetWidth, scaledHeights[i]);
-      y += scaledHeights[i];
+    layout.forEach((item, i) => {
+      if (i > 0) y += blockGap;
+      if (item.kind === "image") {
+        ctx.drawImage(item.img, 0, y, targetWidth, item.height);
+      } else {
+        ctx.fillStyle = "#1a1d21";
+        ctx.font = `${item.fontStyle} ${item.weight} ${item.fontPx}px ${EXPORT_FONT_FAMILY}`;
+        ctx.textBaseline = "top";
+        ctx.textAlign = item.align === "center" ? "center" : item.align === "right" ? "right" : "left";
+        const xPos = item.align === "center" ? targetWidth / 2 : item.align === "right" ? targetWidth - textPadding : textPadding;
+        item.lines.forEach((line, li) => {
+          ctx.fillText(line, xPos, y + textPadding + li * item.lineHeight);
+        });
+      }
+      y += item.height;
     });
 
     const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
@@ -1217,11 +1289,11 @@ function renderContentPanel() {
     headerRow.appendChild(badge);
   }
 
-  const imageCount = section.blocks.filter((b) => b.type === "image").length;
-  if (imageCount > 0) {
+  const exportableCount = section.blocks.filter((b) => b.type === "image" || b.type === "text").length;
+  if (exportableCount > 0) {
     const exportBtn = document.createElement("button");
     exportBtn.className = "export-btn";
-    exportBtn.textContent = `Export ${imageCount} image${imageCount === 1 ? "" : "s"} as one long image`;
+    exportBtn.textContent = "Export topic as one image";
     exportBtn.addEventListener("click", () => exportImagesAsLongImage(section, exportBtn));
     headerRow.appendChild(exportBtn);
   }

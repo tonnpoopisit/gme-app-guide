@@ -40,6 +40,13 @@ The admin header's "View public site →" link deep-links to whatever corridor/t
 
 **Gotcha already hit once**: the style toolbar's preset buttons (Bold/Italic/align/**Default color**) are `<button>`s that mutate `style` on `click`, not `input`/`change` - the auto-save listeners on `toolbar.element` must include `click` too, or clicking those buttons updates what's shown in admin but never actually saves it. Missing this exact listener is what caused a real bug: an admin set an explicit near-black text color, later clicked "Default color" to undo it, and the old color stayed live on the public site (invisible against the dark theme) because the click was never persisted. Custom colors also aren't theme-aware - a color picked while looking at light mode can be unreadable in dark mode or vice versa, so prefer "Default color" over a custom pick unless you've checked both.
 
+## Export as one image
+
+Both `index.html` (customer-facing) and `admin.html` have a button that stitches a topic's **image and text** blocks (in their actual display order - not grouped by type) into one downloadable PNG via `<canvas>`, so a whole topic's instructions read as a single complete image (`exportImagesAsLongImage` + `wrapCanvasText` in each file - duplicated, not shared, since the two pages don't share a JS file). Video/embed blocks are skipped (no static image representation). Two things worth knowing if touching this code:
+
+- Text wraps **character-by-character**, not at word boundaries - most of this app's content is Thai/Lao, which don't use spaces between words the way English does, so word-wrapping would just never break most Thai sentences and overflow the canvas.
+- Text always renders in a fixed dark-on-white style, ignoring any custom `style.color` the admin set for the live (theme-adaptive) site - a color picked for a dark background could be unreadable against the export's plain white canvas otherwise.
+
 ## Enabling translation
 
 Not required to deploy/run the app - without `GOOGLE_TRANSLATE_API_KEY` set, the Translate button just shows a clear "not configured" error and everything else works normally. To enable it:
