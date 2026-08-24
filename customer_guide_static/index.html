@@ -137,6 +137,23 @@
     border: 1px solid var(--border);
     display: block;
   }
+  .embed-wrap {
+    position: relative;
+    width: 100%;
+    max-width: 340px;
+    aspect-ratio: 9 / 16;
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+  }
+  .embed-wrap iframe {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border: none;
+  }
   .block p.text {
     font-size: 15px;
     line-height: 1.6;
@@ -354,6 +371,17 @@ function render(corridorId, activeSlug) {
       video.src = block.url;
       video.controls = true;
       wrap.appendChild(video);
+    } else if (block.type === "embed") {
+      const embedWrap = document.createElement("div");
+      embedWrap.className = "embed-wrap";
+      const iframe = document.createElement("iframe");
+      iframe.src = "https://www.facebook.com/plugins/video.php?href=" + encodeURIComponent(block.embedUrl) + "&show_text=false";
+      iframe.setAttribute("scrolling", "no");
+      iframe.setAttribute("frameborder", "0");
+      iframe.allowFullscreen = true;
+      iframe.allow = "autoplay; clipboard-write; encrypted-media; picture-in-picture; web-share";
+      embedWrap.appendChild(iframe);
+      wrap.appendChild(embedWrap);
     } else {
       const p = document.createElement("p");
       p.className = "text";
@@ -376,17 +404,19 @@ function render(corridorId, activeSlug) {
       const target = corridor.sections.find((s) => s.slug === block.link);
       if (target) {
         const goToTarget = () => { window.location.hash = corridor.id + "/" + block.link; };
-        // Video already has its own click targets (play/pause/scrub), so
-        // only the hint text navigates there; image/text blocks have no
-        // competing click behavior, so the whole card is clickable.
-        if (block.type !== "video") {
+        // Video/embed already have their own click targets (play/pause/
+        // scrub, the Facebook player), so only the hint text navigates
+        // there; image/text blocks have no competing click behavior, so
+        // the whole card is clickable.
+        const hasOwnClickTarget = block.type === "video" || block.type === "embed";
+        if (!hasOwnClickTarget) {
           wrap.classList.add("linked");
           wrap.addEventListener("click", goToTarget);
         }
         const hint = document.createElement("div");
         hint.className = "link-hint";
         hint.textContent = "→ See: " + target.title;
-        if (block.type === "video") {
+        if (hasOwnClickTarget) {
           hint.style.cursor = "pointer";
           hint.addEventListener("click", goToTarget);
         }

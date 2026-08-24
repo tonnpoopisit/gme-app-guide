@@ -456,6 +456,17 @@
     background: var(--error);
     color: #fff;
   }
+  .confirm-ok.save { background: var(--accent); }
+  .prompt-input {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    margin-bottom: 16px;
+  }
 </style>
 </head>
 <body>
@@ -492,6 +503,16 @@
     <div class="confirm-actions">
       <button class="confirm-cancel" id="confirmCancelBtn">Cancel</button>
       <button class="confirm-ok" id="confirmOkBtn">Delete</button>
+    </div>
+  </div>
+</div>
+<div class="confirm-overlay" id="promptOverlay">
+  <div class="confirm-box">
+    <p id="promptMessage"></p>
+    <input type="text" id="promptInput" class="prompt-input">
+    <div class="confirm-actions">
+      <button class="confirm-cancel" id="promptCancelBtn">Cancel</button>
+      <button class="confirm-ok save" id="promptOkBtn">Save</button>
     </div>
   </div>
 </div>
@@ -552,6 +573,45 @@ function showConfirm(message, okLabel) {
     overlay.addEventListener("click", onOverlayClick);
     overlay.classList.add("on");
     okBtn.focus();
+  });
+}
+
+// Same reasoning as showConfirm above - window.prompt() is subject to the
+// identical Chrome dialog-suppression behavior, which is what made rename
+// silently do nothing once a few native dialogs had already fired on the
+// page.
+function showPrompt(message, defaultValue) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById("promptOverlay");
+    document.getElementById("promptMessage").textContent = message;
+    const input = document.getElementById("promptInput");
+    input.value = defaultValue || "";
+    const okBtn = document.getElementById("promptOkBtn");
+    const cancelBtn = document.getElementById("promptCancelBtn");
+
+    function cleanup(result) {
+      overlay.classList.remove("on");
+      okBtn.removeEventListener("click", onOk);
+      cancelBtn.removeEventListener("click", onCancel);
+      overlay.removeEventListener("click", onOverlayClick);
+      input.removeEventListener("keydown", onKeydown);
+      resolve(result);
+    }
+    function onOk() { cleanup(input.value); }
+    function onCancel() { cleanup(null); }
+    function onOverlayClick(e) { if (e.target === overlay) cleanup(null); }
+    function onKeydown(e) {
+      if (e.key === "Enter") { e.preventDefault(); cleanup(input.value); }
+      if (e.key === "Escape") cleanup(null);
+    }
+
+    okBtn.addEventListener("click", onOk);
+    cancelBtn.addEventListener("click", onCancel);
+    overlay.addEventListener("click", onOverlayClick);
+    input.addEventListener("keydown", onKeydown);
+    overlay.classList.add("on");
+    input.focus();
+    input.select();
   });
 }
 
@@ -839,7 +899,7 @@ async function moveCorridor(index, delta) {
 }
 
 async function renameCorridor(corridor) {
-  const label = prompt("Rename corridor", corridor.label);
+  const label = await showPrompt("Rename corridor", corridor.label);
   if (label === null || !label.trim()) return;
   try {
     const updated = await api("/admin/api/corridors/" + corridor.id, {
@@ -985,7 +1045,7 @@ function reorderSectionsByDrag(fromIndex, toIndex) {
 
 async function renameSection(section) {
   const corridor = getActiveCorridor();
-  const title = prompt("Rename topic", section.title);
+  const title = await showPrompt("Rename topic", section.title);
   if (title === null || !title.trim()) return;
   try {
     const updated = await api("/admin/api/corridors/" + corridor.id + "/sections/" + section.slug, {
@@ -1228,6 +1288,15 @@ function renderBlockCard(corridor, section, block, index) {
     viewBtn.textContent = "View full size";
     viewBtn.addEventListener("click", () => openLightbox(block.url, "video"));
     preview.appendChild(viewBtn);
+  } else if (block.type === "embed") {
+    preview.classList.add("text-preview");
+    preview.textContent = "📘 Facebook";
+    const openBtn = document.createElement("button");
+    openBtn.type = "button";
+    openBtn.className = "view-full-btn";
+    openBtn.textContent = "Open link";
+    openBtn.addEventListener("click", () => window.open(block.embedUrl, "_blank"));
+    preview.appendChild(openBtn);
   } else {
     preview.classList.add("text-preview");
     preview.textContent = block.text;
@@ -1262,6 +1331,34 @@ function renderBlockCard(corridor, section, block, index) {
     saveBtn.addEventListener("click", () => updateBlock(block.id, {
       text: textarea.value,
       style: toolbar.getStyle(),
+      link: linkSelect.value || null,
+    }));
+    actions.appendChild(saveBtn);
+    appendMoveDelete(actions, corridor, section, index, block);
+    fields.appendChild(actions);
+  } else if (block.type === "embed") {
+    const urlInput = document.createElement("input");
+    urlInput.type = "text";
+    urlInput.placeholder = "Facebook video/reel link";
+    urlInput.value = block.embedUrl || "";
+    fields.appendChild(urlInput);
+
+    const captionInput = document.createElement("input");
+    captionInput.type = "text";
+    captionInput.placeholder = "Caption (optional)";
+    captionInput.value = block.caption || "";
+    fields.appendChild(captionInput);
+
+    const linkSelect = createLinkSelect(block.link, corridor);
+    fields.appendChild(linkSelect);
+
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    const saveBtn = document.createElement("button");
+    saveBtn.textContent = "Save";
+    saveBtn.addEventListener("click", () => updateBlock(block.id, {
+      embedUrl: urlInput.value.trim(),
+      caption: captionInput.value,
       link: linkSelect.value || null,
     }));
     actions.appendChild(saveBtn);
@@ -1474,6 +1571,43 @@ function renderAddForms(corridor, section) {
     } catch (err) { showToast(err.message, false); }
   });
   wrap.appendChild(textForm);
+
+  const embedForm = document.createElement("form");
+  embedForm.innerHTML = `
+    <h3>Add Facebook video or reel</h3>
+    <input type="text" name="url" placeholder="https://www.facebook.com/... or fb.watch/..." required>
+  `;
+  const embedCaptionInput = document.createElement("input");
+  embedCaptionInput.type = "text";
+  embedCaptionInput.name = "caption";
+  embedCaptionInput.placeholder = "Caption (optional)";
+  embedForm.appendChild(embedCaptionInput);
+  const embedLinkSelect = createLinkSelect(null, corridor);
+  embedForm.appendChild(embedLinkSelect);
+  const embedSubmitBtn = document.createElement("button");
+  embedSubmitBtn.type = "submit";
+  embedSubmitBtn.textContent = "Add embed";
+  embedForm.appendChild(embedSubmitBtn);
+
+  embedForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const urlInput = embedForm.querySelector('input[name="url"]');
+    if (!urlInput.value.trim()) return;
+    try {
+      await api("/admin/api/corridors/" + corridor.id + "/sections/" + section.slug + "/embed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          url: urlInput.value.trim(),
+          caption: embedCaptionInput.value,
+          link: embedLinkSelect.value || null,
+        }),
+      });
+      showToast("Added", true);
+      await loadContent();
+    } catch (err) { showToast(err.message, false); }
+  });
+  wrap.appendChild(embedForm);
 
   return wrap;
 }

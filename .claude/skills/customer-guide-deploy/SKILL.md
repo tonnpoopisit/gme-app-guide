@@ -1,26 +1,34 @@
 ---
 name: customer-guide-deploy
-description: Deploys/maintains the GME customer app guide (customer_guide_server.py, a Flask app teaching customers how to use the GME remittance app - registration, 4-digit code, autodebit+3-digit code, add receiver, send money, limitations - across multiple corridors, currently Laos and Thailand) to Google Cloud Run, backed by a Cloud Storage bucket for persistent data. Covers the full first-deploy runbook (enable APIs, create bucket, migrate content, grant IAM, deploy), the admin's English-to-Thai/Lao translate-on-demand feature (Google Cloud Translation API, needs GOOGLE_TRANSLATE_API_KEY), plus every gotcha hit getting gcloud working on Windows (ESET SSL interception, PowerShell execution policy blocking gcloud.ps1, setx's 1024-char truncation, Cloud Run's 32MB HTTP/1 upload limit). Use this skill whenever the user asks to deploy, redeploy, or troubleshoot this app on Cloud Run, asks about corridors/translation, its Cloud Storage-backed data layer, or hits gcloud CLI setup problems on Windows.
+description: Deploys/maintains the GME customer app guide (customer_guide_server.py, a Flask app teaching customers how to use the GME remittance app - registration, 4-digit code, autodebit+3-digit code, add receiver, send money, limitations - across multiple corridors, currently Laos and Thailand) to Google Cloud Run, backed by a Cloud Storage bucket for persistent data. Covers the full first-deploy runbook (enable APIs, create bucket, migrate content, grant IAM, deploy), the admin's English-to-Thai/Lao translate-on-demand feature (Google Cloud Translation API, needs GOOGLE_TRANSLATE_API_KEY), per-topic hide-from-customers toggling, Facebook video/reel embedding, the custom confirm/prompt modals (native window.confirm/prompt are unreliable here - see below), plus every gotcha hit getting gcloud working on Windows (ESET SSL interception, PowerShell execution policy blocking gcloud.ps1, setx's 1024-char truncation, Cloud Run's 32MB HTTP/1 upload limit). Use this skill whenever the user asks to deploy, redeploy, or troubleshoot this app on Cloud Run, asks about corridors/translation/hidden topics/Facebook embeds, its Cloud Storage-backed data layer, or hits gcloud CLI setup problems on Windows.
 ---
 
 # Customer Guide - Cloud Run Deployment
 
 ## What this app is
 
-A public, no-login customer-facing site (`customer_guide_server.py` + `customer_guide_static/`) with an admin CMS behind a single PIN, teaching GME app customers how to register, use the 4-digit verification code, set up autodebit (3-digit code), add a receiver, send money, and understand limits. Content is organized into **corridors** (currently Laos and Thailand, each with its own language - `lo`/`th`) - customers switch between them with a top-of-page toggle; each corridor has its own independent topic list. Admin can add/rename/reorder both corridors and topics, upload/reorder/caption images and videos, block-level text styling (bold/italic/size/color/align), cross-topic links (scoped within a corridor), and a **Translate** button on every text field (title/caption/text) that sends admin-typed English through Google Cloud Translation API into that corridor's language - skipped automatically (client-side Unicode script detection) if the admin already typed Thai/Lao directly. See the code comments in `customer_guide_server.py` for the full data model.
+A public, no-login customer-facing site (`customer_guide_server.py` + `customer_guide_static/`) with an admin CMS behind a single PIN, teaching GME app customers how to register, use the 4-digit verification code, set up autodebit (3-digit code), add a receiver, send money, and understand limits. Content is organized into **corridors** (currently Laos and Thailand, each with its own language - `lo`/`th`) - customers switch between them with a top-of-page toggle; each corridor has its own independent topic list, and each topic can be individually hidden from customers (still visible/editable in admin, badge-marked) while it's being prepared. Admin can add/rename/reorder both corridors and topics, upload/reorder/caption images and videos, embed Facebook videos/reels by pasting a link (validated against facebook.com/fb.watch, rendered client-side as a responsive 9:16 iframe via Facebook's `/plugins/video.php` embed - no Facebook SDK/app id needed), block-level text styling (bold/italic/size/color/align), cross-topic links (scoped within a corridor), and a **Translate** button on every text field (title/caption/text) that sends admin-typed English through Google Cloud Translation API into that corridor's language - skipped automatically (client-side Unicode script detection) if the admin already typed Thai/Lao directly. See the code comments in `customer_guide_server.py` for the full data model.
 
 ## Data model
 
 ```json
 {"corridors": [
   {"id": "laos", "label": "Laos", "lang": "lo", "sections": [
-    {"slug": "registration", "title": "Registration", "blocks": [...]}
+    {"slug": "registration", "title": "Registration", "hidden": false, "blocks": [
+      {"id": "...", "type": "image|video|text|embed", "caption": "...", "link": null,
+       "filename": "... (image/video only)", "text": "... (text only)", "style": {"... (text only)"},
+       "embedUrl": "https://facebook.com/... (embed only)"}
+    ]}
   ]},
   {"id": "thailand", "label": "Thailand", "lang": "th", "sections": [...]}
 ]}
 ```
 
-Array order *is* display order at every level (corridors, sections, blocks) - no separate "order" field. Corridor/section renames regenerate the `id`/`slug` and physically move the corresponding `customer_guide_uploads/` subfolder - see `admin_rename_corridor`/`admin_rename_section` in `customer_guide_server.py`.
+Array order *is* display order at every level (corridors, sections, blocks) - no separate "order" field. Corridor/section renames regenerate the `id`/`slug` and physically move the corresponding `customer_guide_uploads/` subfolder - see `admin_rename_corridor`/`admin_rename_section` in `customer_guide_server.py`. `hidden` sections are dropped entirely from `/api/content` (customer-facing) but kept (with the flag) in `/admin/api/content` - see `_content_public_view(include_hidden=...)`.
+
+## Native browser dialogs are unreliable here - don't reintroduce them
+
+`window.confirm()`/`window.prompt()` looked broken (delete/rename buttons silently did nothing) because Chrome lets a page's dialogs get suppressed after a few fire in a row ("Prevent this page from creating additional dialogs"), and this app's admin panel triggers enough of them in normal use to hit that. Both were replaced with custom in-page modals - `showConfirm(message)` / `showPrompt(message, defaultValue)` in `admin.html`, returning Promises. **Any new destructive action or rename-style input must use these, not the native `confirm`/`prompt`**, or the same silent-failure bug comes back.
 
 ## Enabling translation
 

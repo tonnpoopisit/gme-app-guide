@@ -292,6 +292,19 @@ def _validate_link(raw_link, corridor: dict) -> str | None:
     return raw_link if raw_link in valid_slugs else None
 
 
+# Only Facebook (Reels/videos) is supported today - restricting to this
+# domain pattern rather than accepting arbitrary embed HTML is what makes
+# _block_public_view safe to trust: the embed iframe's src is built
+# server-side from a URL that's already been confirmed to point at
+# facebook.com/fb.watch, never from admin-supplied markup.
+EMBED_URL_RE = re.compile(r"^https://([a-z0-9-]+\.)?(facebook\.com|fb\.watch)/", re.IGNORECASE)
+
+
+def _validate_embed_url(raw_url) -> str | None:
+    url = str(raw_url or "").strip()
+    return url if EMBED_URL_RE.match(url) else None
+
+
 def _block_public_view(corridor_id: str, section_slug: str, block: dict) -> dict:
     view = {
         "id": block["id"],
@@ -302,6 +315,8 @@ def _block_public_view(corridor_id: str, section_slug: str, block: dict) -> dict
     if block["type"] == "text":
         view["text"] = block.get("text", "")
         view["style"] = block.get("style") or DEFAULT_STYLE
+    elif block["type"] == "embed":
+        view["embedUrl"] = block.get("embedUrl", "")
     else:
         view["url"] = f"/media/{corridor_id}/{section_slug}/{block['filename']}"
     return view
@@ -660,6 +675,29 @@ def admin_add_text_block(corridor_id, slug):
     return jsonify(_block_public_view(corridor_id, slug, block))
 
 
+@app.route("/admin/api/corridors/<corridor_id>/sections/<slug>/embed", methods=["POST"])
+def admin_add_embed_block(corridor_id, slug):
+    embed_url = _validate_embed_url((request.get_json(force=True, silent=True) or {}).get("url"))
+    if not embed_url:
+        return jsonify({"error": "Enter a valid facebook.com or fb.watch video/reel link"}), 400
+    data = request.get_json(force=True, silent=True) or {}
+    caption = str(data.get("caption", "")).strip()
+
+    with _content_lock:
+        content = _load_content()
+        corridor = _find_corridor(content, corridor_id)
+        if corridor is None:
+            return jsonify({"error": "Corridor not found"}), 404
+        section = _find_section(corridor, slug)
+        if section is None:
+            return jsonify({"error": "Section not found"}), 404
+        link = _validate_link(data.get("link"), corridor)
+        block = {"id": uuid.uuid4().hex, "type": "embed", "embedUrl": embed_url, "caption": caption, "link": link}
+        section["blocks"].append(block)
+        _save_content(content)
+    return jsonify(_block_public_view(corridor_id, slug, block))
+
+
 @app.route("/admin/api/blocks/<block_id>", methods=["PUT"])
 def admin_edit_block(block_id):
     data = request.get_json(force=True, silent=True) or {}
@@ -673,6 +711,11 @@ def admin_edit_block(block_id):
             block["text"] = str(data["text"]).strip()
         if block["type"] == "text" and "style" in data:
             block["style"] = _validate_style(data["style"])
+        if block["type"] == "embed" and "embedUrl" in data:
+            validated = _validate_embed_url(data["embedUrl"])
+            if not validated:
+                return jsonify({"error": "Enter a valid facebook.com or fb.watch video/reel link"}), 400
+            block["embedUrl"] = validated
         if "caption" in data:
             block["caption"] = str(data["caption"]).strip()
         if "link" in data:
