@@ -142,6 +142,17 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .section-row.hidden-topic .name { opacity: 0.5; font-style: italic; }
+  .hidden-badge {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: var(--error-bg);
+    color: var(--error);
+    margin-left: 8px;
+    vertical-align: middle;
+  }
   .section-row button {
     background: none;
     border: none;
@@ -406,6 +417,45 @@
     font-size: 16px;
     cursor: pointer;
   }
+
+  .confirm-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 1100;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .confirm-overlay.on { display: flex; }
+  .confirm-box {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    max-width: 360px;
+    width: 100%;
+  }
+  .confirm-box p { margin: 0 0 16px; font-size: 14px; line-height: 1.5; }
+  .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
+  .confirm-actions button {
+    padding: 8px 14px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .confirm-cancel {
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+    color: var(--text);
+  }
+  .confirm-ok {
+    border: none;
+    background: var(--error);
+    color: #fff;
+  }
 </style>
 </head>
 <body>
@@ -436,6 +486,15 @@
     <button class="lightbox-close" id="lightboxClose">✕</button>
   </div>
 </div>
+<div class="confirm-overlay" id="confirmOverlay">
+  <div class="confirm-box">
+    <p id="confirmMessage"></p>
+    <div class="confirm-actions">
+      <button class="confirm-cancel" id="confirmCancelBtn">Cancel</button>
+      <button class="confirm-ok" id="confirmOkBtn">Delete</button>
+    </div>
+  </div>
+</div>
 
 <script>
 // --------------------------------------------------------------------------
@@ -461,6 +520,40 @@ document.getElementById("lightbox").addEventListener("click", (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeLightbox();
 });
+
+// --------------------------------------------------------------------------
+// Custom confirm dialog - replaces window.confirm(), which some browsers
+// (Chrome, after a few dialogs fire in quick succession) let the user
+// silently suppress via "Prevent this page from creating additional
+// dialogs," making delete buttons look broken with no visible error. This
+// is styled, always visible, and isn't subject to that suppression.
+// --------------------------------------------------------------------------
+function showConfirm(message, okLabel) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById("confirmOverlay");
+    document.getElementById("confirmMessage").textContent = message;
+    const okBtn = document.getElementById("confirmOkBtn");
+    const cancelBtn = document.getElementById("confirmCancelBtn");
+    okBtn.textContent = okLabel || "Delete";
+
+    function cleanup(result) {
+      overlay.classList.remove("on");
+      okBtn.removeEventListener("click", onOk);
+      cancelBtn.removeEventListener("click", onCancel);
+      overlay.removeEventListener("click", onOverlayClick);
+      resolve(result);
+    }
+    function onOk() { cleanup(true); }
+    function onCancel() { cleanup(false); }
+    function onOverlayClick(e) { if (e.target === overlay) cleanup(false); }
+
+    okBtn.addEventListener("click", onOk);
+    cancelBtn.addEventListener("click", onCancel);
+    overlay.addEventListener("click", onOverlayClick);
+    overlay.classList.add("on");
+    okBtn.focus();
+  });
+}
 
 // --------------------------------------------------------------------------
 // Translation - script detection is pure client-side (Unicode ranges), the
@@ -762,7 +855,8 @@ async function renameCorridor(corridor) {
 
 async function deleteCorridor(corridor) {
   if (content.corridors.length <= 1) return;
-  if (!confirm('Delete corridor "' + corridor.label + '" and ALL its topics and content? This cannot be undone.')) return;
+  const ok = await showConfirm('Delete corridor "' + corridor.label + '" and ALL its topics and content? This cannot be undone.');
+  if (!ok) return;
   try {
     await api("/admin/api/corridors/" + corridor.id, { method: "DELETE" });
     if (activeCorridorId === corridor.id) activeCorridorId = null;
@@ -787,7 +881,7 @@ function renderSections() {
 
   corridor.sections.forEach((s, i) => {
     const row = document.createElement("div");
-    row.className = "section-row" + (s.slug === activeSlug ? " active" : "");
+    row.className = "section-row" + (s.slug === activeSlug ? " active" : "") + (s.hidden ? " hidden-topic" : "");
     row.draggable = true;
     row.addEventListener("dragstart", (e) => {
       draggedSectionIndex = i;
@@ -844,6 +938,12 @@ function renderSections() {
     rename.addEventListener("click", () => renameSection(s));
     row.appendChild(rename);
 
+    const visToggle = document.createElement("button");
+    visToggle.textContent = s.hidden ? "🙈" : "👁";
+    visToggle.title = s.hidden ? "Hidden from customers - click to show" : "Visible to customers - click to hide";
+    visToggle.addEventListener("click", () => toggleSectionVisibility(s));
+    row.appendChild(visToggle);
+
     const del = document.createElement("button");
     del.textContent = "✕";
     del.title = "Delete topic";
@@ -899,9 +999,23 @@ async function renameSection(section) {
   } catch (e) { showToast(e.message, false); }
 }
 
+async function toggleSectionVisibility(section) {
+  const corridor = getActiveCorridor();
+  try {
+    await api("/admin/api/corridors/" + corridor.id + "/sections/" + section.slug, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hidden: !section.hidden }),
+    });
+    await loadContent();
+    showToast(section.hidden ? "Now visible to customers" : "Hidden from customers", true);
+  } catch (e) { showToast(e.message, false); }
+}
+
 async function deleteSection(section) {
   const corridor = getActiveCorridor();
-  if (!confirm('Delete topic "' + section.title + '" and all its content? This cannot be undone.')) return;
+  const ok = await showConfirm('Delete topic "' + section.title + '" and all its content? This cannot be undone.');
+  if (!ok) return;
   try {
     await api("/admin/api/corridors/" + corridor.id + "/sections/" + section.slug, { method: "DELETE" });
     if (activeSlug === section.slug) activeSlug = null;
@@ -1021,7 +1135,14 @@ function renderContentPanel() {
   const h2 = document.createElement("h2");
   h2.textContent = section.title;
   h2.style.margin = "0";
+  h2.style.display = "inline-block";
   headerRow.appendChild(h2);
+  if (section.hidden) {
+    const badge = document.createElement("span");
+    badge.className = "hidden-badge";
+    badge.textContent = "Hidden from customers";
+    headerRow.appendChild(badge);
+  }
 
   const imageCount = section.blocks.filter((b) => b.type === "image").length;
   if (imageCount > 0) {
@@ -1242,7 +1363,8 @@ async function updateBlock(blockId, payload) {
 }
 
 async function deleteBlock(blockId) {
-  if (!confirm("Delete this block?")) return;
+  const ok = await showConfirm("Delete this block?");
+  if (!ok) return;
   try {
     await api("/admin/api/blocks/" + blockId, { method: "DELETE" });
     await loadContent();

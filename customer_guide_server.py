@@ -319,10 +319,26 @@ def index():
 
 @app.route("/api/content")
 def api_content():
-    return jsonify(_content_public_view())
+    return jsonify(_content_public_view(include_hidden=False))
 
 
-def _content_public_view() -> dict:
+def _section_view(section: dict, corridor_id: str, include_hidden: bool) -> dict:
+    view = {
+        "slug": section["slug"],
+        "title": section["title"],
+        "blocks": [_block_public_view(corridor_id, section["slug"], b) for b in section["blocks"]],
+    }
+    if include_hidden:
+        view["hidden"] = section.get("hidden", False)
+    return view
+
+
+def _content_public_view(include_hidden: bool = False) -> dict:
+    """include_hidden=False (customer-facing /api/content) drops any
+    section marked hidden entirely - not just visually, it's absent from
+    the JSON so there's no link/hash a customer could use to reach it
+    anyway. include_hidden=True (/admin/api/content) keeps every section,
+    with a `hidden` flag, so the admin can still find and unhide them."""
     content = _load_content()
     corridors = [
         {
@@ -330,12 +346,9 @@ def _content_public_view() -> dict:
             "label": c["label"],
             "lang": c["lang"],
             "sections": [
-                {
-                    "slug": s["slug"],
-                    "title": s["title"],
-                    "blocks": [_block_public_view(c["id"], s["slug"], b) for b in s["blocks"]],
-                }
+                _section_view(s, c["id"], include_hidden)
                 for s in c["sections"]
+                if include_hidden or not s.get("hidden", False)
             ],
         }
         for c in content["corridors"]
@@ -367,7 +380,7 @@ def admin_page():
 
 @app.route("/admin/api/content")
 def admin_api_content():
-    return jsonify(_content_public_view())
+    return jsonify(_content_public_view(include_hidden=True))
 
 
 @app.route("/admin/api/translate", methods=["POST"])
@@ -508,10 +521,14 @@ def admin_create_section(corridor_id):
 
 @app.route("/admin/api/corridors/<corridor_id>/sections/<slug>", methods=["PUT"])
 def admin_rename_section(corridor_id, slug):
+    """Doubles as the visibility-toggle endpoint: `title` renames (and may
+    change the slug/uploads folder, as before), `hidden` independently
+    flips whether the section is dropped from the customer-facing
+    /api/content. Either field alone is a valid request - the admin's
+    "hide from customers" button doesn't need to resend the title."""
     data = request.get_json(force=True, silent=True) or {}
-    new_title = str(data.get("title", "")).strip()
-    if not new_title:
-        return jsonify({"error": "Title is required"}), 400
+    if "title" not in data and "hidden" not in data:
+        return jsonify({"error": "Nothing to update"}), 400
 
     with _content_lock:
         content = _load_content()
@@ -522,16 +539,23 @@ def admin_rename_section(corridor_id, slug):
         if section is None:
             return jsonify({"error": "Section not found"}), 404
 
-        other_slugs = {s["slug"] for s in corridor["sections"] if s["slug"] != slug}
-        new_slug = _unique_slug(_slugify(new_title), other_slugs)
+        if "title" in data:
+            new_title = str(data["title"]).strip()
+            if not new_title:
+                return jsonify({"error": "Title is required"}), 400
+            other_slugs = {s["slug"] for s in corridor["sections"] if s["slug"] != slug}
+            new_slug = _unique_slug(_slugify(new_title), other_slugs)
+            if new_slug != slug:
+                old_dir = UPLOADS_DIR / corridor_id / slug
+                new_dir = UPLOADS_DIR / corridor_id / new_slug
+                if old_dir.exists():
+                    old_dir.rename(new_dir)
+                section["slug"] = new_slug
+            section["title"] = new_title
 
-        if new_slug != slug:
-            old_dir = UPLOADS_DIR / corridor_id / slug
-            new_dir = UPLOADS_DIR / corridor_id / new_slug
-            if old_dir.exists():
-                old_dir.rename(new_dir)
-            section["slug"] = new_slug
-        section["title"] = new_title
+        if "hidden" in data:
+            section["hidden"] = bool(data["hidden"])
+
         _save_content(content)
     return jsonify(section)
 
